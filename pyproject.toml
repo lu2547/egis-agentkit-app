@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "egis-agentkit-app"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["egis-agentkit-framework[cluster]", "python-dotenv>=1.0", "uvicorn>=0.30"]
+
+[project.scripts]
+egis-agentkit = "egis_agentkit_app.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/egis_agentkit_app"]
+
+[tool.uv.sources]
+egis-agentkit-framework = { path = "../egis-agentkit-framework", editable = true }
+agentscope = { path = "../../harness/agentscope", editable = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
