@@ -90,6 +90,7 @@ async def main():
         "allow_model_override": True,
         "allowed_model_keys": ["company"],
         "max_upload_bytes": 20 * 1024 * 1024,
+        "max_skill_archive_bytes": 50 * 1024 * 1024 - 1,
     }
     async with NacosClient(nacos_bootstrap()) as client:
         for kind, config in (

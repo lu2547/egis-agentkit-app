@@ -6,14 +6,17 @@ from uuid import NAMESPACE_URL, uuid5
 
 from agentscope.app.storage import AsyncSQLAlchemyStorage
 from egis_agentkit.config import NacosClient, NacosConfigProvider
-from egis_agentkit.hubs import NacosMCPHub, NacosSkillHub
-from egis_agentkit.message_bus import EgisMessageBus
+from egis_agentkit.extensions.hub import NacosMCPHub, NacosSkillHub
+from egis_agentkit.extensions.message_bus import EgisMessageBus
 from egis_agentkit.models import Asset, Definition, Grant, Group
 from egis_agentkit.packages import PackageLoader
+from egis_agentkit.service.agent.package import PackageService
+from egis_agentkit.service.resource.service import (
+    mcp_config_checksum,
+    skill_archive_digest,
+)
+from egis_agentkit.service.team.definition import TeamService
 from egis_agentkit.services import AgentService, PermissionService, UserService
-from egis_agentkit.services.packages import PackageService
-from egis_agentkit.services.resources import mcp_config_checksum, skill_archive_digest
-from egis_agentkit.services.teams import TeamService
 from egis_agentkit.storage import AgentKitStorage
 from egis_agentkit.storage import tables as t
 from sqlalchemy import select, update
@@ -99,7 +102,7 @@ async def seed_demo(storage, provider, client):
     try:
         async for chunk in archive.stream:
             content.extend(chunk)
-            if len(content) > provider.snapshot.policies.max_upload_bytes:
+            if len(content) > provider.snapshot.policies.max_skill_archive_bytes:
                 raise ValueError("演示 Skill 包超过上传限制")
     finally:
         await archive.stream.aclose()

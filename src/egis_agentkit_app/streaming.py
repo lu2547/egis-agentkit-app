@@ -8,7 +8,7 @@ native replay, heartbeat, and disconnect implementation.
 import asyncio
 from contextlib import suppress
 
-from egis_agentkit.services.assembly import stream_subscription_ready
+from egis_agentkit.extensions.compatibility.execution import stream_subscription_ready
 
 
 class StreamReady:

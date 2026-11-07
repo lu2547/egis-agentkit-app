@@ -49,7 +49,7 @@ class IdentityGuard:
                 )
             except Forbidden:
                 return await self._error(send, 401, "认证无效或已过期")
-            users = self.services["users"]
+            users = self.services.users
             # Trusted company identity can introduce an ordinary user, never an admin.
             user = await users.sync_identity(
                 claims["sub"], claims.get("name") or claims["sub"]
@@ -74,7 +74,7 @@ class IdentityGuard:
                     return await self._error(send, 400, "无效聊天请求")
                 if not isinstance(data, dict):
                     return await self._error(send, 400, "聊天请求必须是对象")
-                await self.services["tasks"].session(
+                await self.services.tasks.session(
                     user, data.get("session_id", ""), agent_id=data.get("agent_id", "")
                 )
             elif path.startswith("/sessions/"):
@@ -93,7 +93,7 @@ class IdentityGuard:
                 aid = params.get("agent_id", [""])[0]
                 if not aid:
                     raise Forbidden("缺少智能体标识")
-                await self.services["tasks"].session(user, parts[1], agent_id=aid)
+                await self.services.tasks.session(user, parts[1], agent_id=aid)
             elif path.startswith("/hub/"):
                 # Native card detail selects registry "latest". Managed routes
                 # require the exact PG version and reviewed source digest.

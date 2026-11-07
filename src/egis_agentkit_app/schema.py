@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from agentscope.permission import PermissionMode
@@ -35,6 +36,16 @@ class TaskWrite(Request):
     name: str | None = Field(default=None, max_length=200)
     model_key: str | None = None
     permission_mode: PermissionMode = PermissionMode.DEFAULT
+
+
+class CollaboratorRef(Request):
+    definition_id: str = Field(min_length=1, max_length=128)
+    resource_view_type: Literal["private", "system", "shared"]
+
+
+class TaskCollaboratorsWrite(Request):
+    request_id: str = Field(min_length=1, max_length=128)
+    experts: list[CollaboratorRef] = Field(max_length=16)
 
 
 class TaskNameWrite(Request):
@@ -78,3 +89,24 @@ class PreferencesWrite(Request):
     agent_md: str = Field(max_length=64000)
     soul_md: str = Field(max_length=64000)
     user_md: str = Field(max_length=64000)
+
+
+class SkillImportJob(BaseModel):
+    job_id: str
+    filename: str
+    category: str
+    avatar: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    stage: str
+    progress: int
+    attempts: int
+    resource_id: str
+    resource_version: str | None = None
+    error: str | None = None
+    result: dict | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillImportList(BaseModel):
+    items: list[SkillImportJob]

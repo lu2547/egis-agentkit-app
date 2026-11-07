@@ -167,8 +167,9 @@ async def main(check_hitl, check_stop):
             hitl_task = response.json()
             target = (
                 workspace_root
-                / "user/demo.user/work"
-                / hitl_task["session_id"]
+                / "user/demo.user/projects"
+                / hitl_task["project_id"]
+                / ".work"
                 / "check.txt"
             )
             summary["hitl"] = await run_reply(

@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 from agentscope.app.message_bus import MessageBusKeys
 from dotenv import load_dotenv
-from egis_agentkit.message_bus import EgisMessageBus
+from egis_agentkit.extensions.message_bus import EgisMessageBus
 from egis_agentkit.storage import AgentKitStorage
 from sqlalchemy.ext.asyncio import create_async_engine
 
