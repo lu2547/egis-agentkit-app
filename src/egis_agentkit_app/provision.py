@@ -8,15 +8,17 @@ from agentscope.app.storage import AsyncSQLAlchemyStorage
 from egis_agentkit.config import NacosClient, NacosConfigProvider
 from egis_agentkit.extensions.hub import NacosMCPHub, NacosSkillHub
 from egis_agentkit.extensions.message_bus import EgisMessageBus
+from egis_agentkit.extensions.package import PackageLoader
 from egis_agentkit.models import Asset, Definition, Grant, Group
-from egis_agentkit.packages import PackageLoader
+from egis_agentkit.service.access import PermissionService
+from egis_agentkit.service.agent import AgentService
 from egis_agentkit.service.agent.package import PackageService
 from egis_agentkit.service.resource.service import (
     mcp_config_checksum,
     skill_archive_digest,
 )
-from egis_agentkit.service.team.definition import TeamService
-from egis_agentkit.services import AgentService, PermissionService, UserService
+from egis_agentkit.service.team import TeamService
+from egis_agentkit.service.user import UserService
 from egis_agentkit.storage import AgentKitStorage
 from egis_agentkit.storage import tables as t
 from sqlalchemy import select, update

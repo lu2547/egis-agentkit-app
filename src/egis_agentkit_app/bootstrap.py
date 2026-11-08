@@ -3,50 +3,17 @@
 import hmac
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from agentscope.app import create_app
 from agentscope.app.deps import get_current_user_id
 from egis_agentkit.auth import JWTIdentity
-from egis_agentkit.bootstrap import AgentKitServices
-from egis_agentkit.config import (
-    NacosBootstrap,
-    NacosClient,
-    NacosConfigProvider,
-    NacosError,
-)
+from egis_agentkit.bootstrap import build_components
+from egis_agentkit.config import NacosClient, NacosConfigProvider, NacosError
+from egis_agentkit.config import nacos_bootstrap as nacos_bootstrap
 from egis_agentkit.errors import AgentKitError
-from egis_agentkit.extensions.agent.factory import AgentFactories
-from egis_agentkit.extensions.compatibility.execution import (
-    ExecutionCoordinator,
-    ScopedMessageBus,
-)
-from egis_agentkit.extensions.hub import NacosMCPHub, NacosSkillHub
-from egis_agentkit.extensions.workspace.local import EgisLocalWorkspaceManager
-from egis_agentkit.integration.nacos.registry import NacosHubManagement
-from egis_agentkit.packages import PackageLoader
-from egis_agentkit.service.access.authorization import PermissionService
-from egis_agentkit.service.access.sharing import ShareService
-from egis_agentkit.service.agent.definition import AgentService
-from egis_agentkit.service.agent.detail import DefinitionDetailService
-from egis_agentkit.service.agent.package import PackageService
-from egis_agentkit.service.model.service import ModelService
-from egis_agentkit.service.project.service import ProjectService
-from egis_agentkit.service.session.composer import ComposerService
-from egis_agentkit.service.session.service import TaskService
-from egis_agentkit.service.team.definition import TeamService
-from egis_agentkit.service.user.preferences import PreferenceService
-from egis_agentkit.service.user.service import UserService
-from egis_agentkit.service.workspace.changes import FileChangeService
-from egis_agentkit.service.workspace.files import WorkspaceFiles
-from egis_agentkit.service.workspace.preview import DocumentPreviewService
-from egis_agentkit.service.workspace.service import WorkspaceService
-from egis_agentkit.storage import AgentKitStorage
 from fastapi import HTTPException, Request
 from fastapi.middleware import Middleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from .manager_router import router
 from .schema import LoginWrite
@@ -54,134 +21,28 @@ from .security import IdentityGuard, native_user_id
 from .streaming import StreamReady
 
 
-class _LivePolicies:
-    """Services read the latest validated Nacos policy at each operation."""
-
-    def __init__(self, provider):
-        self.provider = provider
-
-    def __getattr__(self, name):
-        return getattr(self.provider.snapshot.policies, name)
-
-
-def nacos_bootstrap():
-    return NacosBootstrap(
-        server_url=os.environ.get("NACOS_SERVER_URL", "http://127.0.0.1:8848"),
-        console_url=os.environ.get("NACOS_CONSOLE_URL") or None,
-        namespace_id=os.environ.get("NACOS_NAMESPACE_ID", "public"),
-        group=os.environ.get("NACOS_GROUP", "EGIS_AGENTKIT"),
-        identity_key=os.environ.get("NACOS_IDENTITY_KEY") or None,
-        identity_value=os.environ.get("NACOS_IDENTITY_VALUE") or None,
-        access_token=os.environ.get("NACOS_ACCESS_TOKEN") or None,
-    )
-
-
-async def build_app(config: NacosConfigProvider, client: NacosClient, *, engine=None):
-    from egis_agentkit.service.resource.imports import SkillImportService
-    from egis_agentkit.service.resource.service import ResourceService
-
+async def build_app(
+    config: NacosConfigProvider, client: NacosClient, *, engine=None, owns_client=True
+):
     settings = config.snapshot.runtime
     database_url = os.environ.get(settings.database_url_env)
     download_secret = os.environ.get(settings.download_secret_env)
     if not database_url or not download_secret or len(download_secret) < 32:
         raise ValueError("必须配置 PG 连接和统一 download_secret 部署密钥")
-    if settings.workspace_mode != "local":
-        raise ValueError(
-            "当前工作区目录/产物 Adapter 为 local；配置 sandbox 前需要接入 NAS 路径映射"
-        )
-    owns_engine = engine is None
-    engine = engine or create_async_engine(
-        database_url,
-        pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=10,
-        hide_parameters=True,
-    )
-    storage = AgentKitStorage(database_url, engine)
-    bus = ScopedMessageBus(
-        deployment_mode=settings.deployment_mode,
-        engine=engine,
-        kafka_bootstrap_servers=settings.kafka_bootstrap_servers,
-        topic_prefix=settings.kafka_topic_prefix,
-    )
-    loader = PackageLoader([Path(p) for p in settings.release_roots])
+
     identity = JWTIdentity(settings.auth)
-    policies = _LivePolicies(config)
-    users = UserService(storage)
-    agents = AgentService(storage, policies)
-    permissions = PermissionService(storage, policies)
-    models = ModelService(storage, config)
-    files = WorkspaceFiles(
-        Path(settings.workspace_root), config.snapshot.policies.max_upload_bytes
+    components = build_components(
+        config, client, database_url, engine=engine, owns_client=owns_client
     )
-    # Adoption uses the renewing native lock primitive without starting a chat
-    # execution scope. The native ChatService uses ScopedMessageBus normally.
-    projects = ProjectService(
-        storage,
-        settings.workspace_root,
-        bus,
-        acquire_session_lock=super(ScopedMessageBus, bus).acquire_lock,
-    )
-    tasks = TaskService(
-        storage, settings.workspace_root, models, config, projects=projects
-    )
-    bus.coordinator = ExecutionCoordinator(
-        storage, settings.workspace_root, config, projects=projects
-    )
-    packages = PackageService(storage, loader)
-
-    async def authorize_hub(user_id, resource_type, resource_id, operation):
-        return await resources.authorize_hub(
-            user_id, resource_type, resource_id, operation
-        )
-
-    skill_hub = NacosSkillHub(client, authorize=authorize_hub)
-    mcp_hub = NacosMCPHub(client, authorize=authorize_hub)
-    resources = ResourceService(
-        storage,
-        skill_hub,
-        mcp_hub,
-        NacosHubManagement(client),
-        settings.workspace_root,
-        policies=policies,
-    )
-    services = AgentKitServices(
-        users=users,
-        agents=agents,
-        teams=TeamService(storage, policies),
-        permissions=permissions,
-        sharing=ShareService(storage),
-        models=models,
-        preferences=PreferenceService(storage, settings.workspace_root),
-        projects=projects,
-        packages=packages,
-        resources=resources,
-        skill_imports=SkillImportService(storage, resources),
-        tasks=tasks,
-        workspace=WorkspaceService(
-            files,
-            projects,
-            tasks,
-            FileChangeService(storage, settings.workspace_root),
-            DocumentPreviewService(),
-        ),
-        definition_details=DefinitionDetailService(storage, agents, permissions),
-    )
-    services.composer = ComposerService(storage, agents, resources, services.workspace)
-    bus.coordinator.loader, bus.coordinator.models = loader, models
-    bus.coordinator.packages = packages
-    workspace = EgisLocalWorkspaceManager(settings.workspace_root, resources)
-    factories = AgentFactories(
-        storage, loader, settings.workspace_root, resources, config
-    )
+    services, bus = components.services, components.bus
     app = create_app(
-        storage=storage,
+        storage=components.native_storage,
         message_bus=bus,
-        workspace_manager=workspace,
-        skill_hubs=[skill_hub],
-        mcp_hubs=[mcp_hub],
-        extra_agent_tools=factories.tools,
-        extra_agent_middlewares=factories.middlewares,
+        workspace_manager=components.workspace,
+        skill_hubs=[components.skill_hub],
+        mcp_hubs=[components.mcp_hub],
+        extra_agent_tools=components.tools,
+        extra_agent_middlewares=components.middlewares,
         download_secret=download_secret,
         enable_scheduler=False,
         enable_channel_worker=False,
@@ -194,7 +55,7 @@ async def build_app(config: NacosConfigProvider, client: NacosClient, *, engine=
         version="0.1.0",
     )
     app.state.egis_services, app.state.egis_config = services, config
-    app.state.egis_loader, app.state.egis_bus = loader, bus
+    app.state.egis_loader, app.state.egis_bus = components.loader, bus
     app.dependency_overrides[get_current_user_id] = native_user_id
     app.include_router(router)
 
@@ -237,8 +98,7 @@ async def build_app(config: NacosConfigProvider, client: NacosClient, *, engine=
 
     @app.get("/health/ready", tags=["health"])
     async def ready():
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
+        await components.check_database()
         bus_health = bus.health()
         body = {
             "is_ready": bus_health["is_ready"],
@@ -254,24 +114,8 @@ async def build_app(config: NacosConfigProvider, client: NacosClient, *, engine=
 
     @asynccontextmanager
     async def lifespan(application):
-        try:
-            await config.start()
-            # Load configured immutable packages before native Dispatcher can
-            # consume old durable wakeups during its startup drain.
-            await services.packages.restore_loaded()
-            async with native_lifespan(application):
-                await services.skill_imports.start()
-                try:
-                    yield
-                finally:
-                    await services.skill_imports.close()
-        finally:
-            if factories.memory:
-                await factories.memory.close()
-            await config.close()
-            await client.close()
-            if owns_engine:
-                await engine.dispose()
+        async with components.lifespan(native_lifespan(application)):
+            yield
 
     app.router.lifespan_context = lifespan
     return app

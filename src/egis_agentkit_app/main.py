@@ -10,17 +10,13 @@ from .bootstrap import build_app, nacos_bootstrap
 
 
 async def serve(host, port):
-    client = NacosClient(nacos_bootstrap())
-    provider = NacosConfigProvider(client)
-    try:
+    async with NacosClient(nacos_bootstrap()) as client:
+        provider = NacosConfigProvider(client)
         await provider.refresh()
-        app = await build_app(provider, client)
+        app = await build_app(provider, client, owns_client=False)
         await uvicorn.Server(
             uvicorn.Config(app, host=host, port=port, log_level="info", access_log=True)
         ).serve()
-    finally:
-        await provider.close()
-        await client.close()
 
 
 def main():

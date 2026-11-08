@@ -1,6 +1,6 @@
 """Team definition HTTP endpoints."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 
 from ..schema import TeamWrite
 from ..security import current_user
@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("/teams")
 async def list_teams(request: Request, user=Depends(current_user)):
-    return {"items": await services(request).agents.list(user, definition_type="team")}
+    return {"items": await services(request).teams.list(user)}
 
 
 @router.get("/teams/{identifier}")
@@ -40,3 +40,11 @@ async def update_team(
     identifier: str, body: TeamWrite, request: Request, user=Depends(current_user)
 ):
     return await save_team(request, user, body, identifier)
+
+
+@router.delete("/teams/{identifier}", status_code=204)
+async def delete_definition(
+    identifier: str, request: Request, user=Depends(current_user)
+):
+    await services(request).teams.delete(user, identifier)
+    return Response(status_code=204)

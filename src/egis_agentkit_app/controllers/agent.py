@@ -58,9 +58,7 @@ async def update_agent(
     return await save_agent(request, user, body, identifier)
 
 
-# Both resource kinds use the definition deletion use case; register it once.
 @router.delete("/agents/{identifier}", status_code=204)
-@router.delete("/teams/{identifier}", status_code=204)
 async def delete_definition(
     identifier: str, request: Request, user=Depends(current_user)
 ):
