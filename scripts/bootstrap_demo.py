@@ -45,87 +45,45 @@ async def main():
         if key not in existing and value:
             set_key(str(env_path), key, str(value))
     load_dotenv(env_path)
-    from egis_agentkit.config import NacosClient, NacosConfigProvider
+    from egis_agentkit.backend.nacos import (
+        AGENTKIT_DATA_ID,
+        CONFIG_NOT_FOUND_CODE,
+        NacosClient,
+        NacosConfigProvider,
+        NacosError,
+        load_agentkit_config,
+    )
 
     from egis_agentkit_app.bootstrap import nacos_bootstrap
 
-    version = 1
-    runtime = {
-        "config_version": version,
-        "database_url_env": "AGENTKIT_DATABASE_URL",
-        "workspace_root": str(APP / "var/workspace"),
-        "release_roots": [str(ROOT / "demo/agentscope-demo/agentkit_demo/releases")],
-        "workspace_mode": "local",
-        "deployment_mode": "cluster",
-        "kafka_bootstrap_servers": ["127.0.0.1:9092"],
-        "kafka_topic_prefix": "egis-agentkit",
-        "download_secret_env": "AGENTKIT_DOWNLOAD_SECRET",
-        "auth": {
-            "mode": "demo",
-            "issuer": "egis-agentkit-demo",
-            "audience": "egis-agentkit",
-            "algorithm": "HS256",
-        },
-    }
-    models = {
-        "config_version": version,
-        "default_key": "company",
-        "models": [
-            {
-                "key": "company",
-                "display_name": "公司模型服务",
-                "model": demo.get("MODEL_NAME") or "configured-company-model",
-                "base_url": demo.get("LLM_BASE_URL"),
-                "api_key_env": "AGENTKIT_MODEL_API_KEY",
-                "credential_type": "openai_credential",
-                "model_class": "openai_chat",
-                "parameters": {},
-            }
-        ],
-    }
-    policies = {
-        "config_version": version,
-        "allow_private_self_use": True,
-        "allow_personal_self_use": True,
-        "allow_model_override": True,
-        "allowed_model_keys": ["company"],
-        "max_upload_bytes": 20 * 1024 * 1024,
-        "max_skill_archive_bytes": 50 * 1024 * 1024 - 1,
-    }
+    example = APP.parent / "egis-agentkit-framework/examples/nacos/agentkit.yaml"
+    document = yaml.safe_load(example.read_text())
+    settings = document["agentkit"]
+    settings["workspace"]["runtime"]["root"] = str(APP / "var/workspace")
+    settings["backend"]["kafka"]["connection"]["deploymentMode"] = "cluster"
+    settings["user"]["identity"].update(
+        mode="demo", issuer="egis-agentkit-demo", algorithm="HS256", jwksUrl=None
+    )
+    settings["model"]["catalog"]["models"][0].update(
+        displayName="DeepSeek V4 Flash",
+        model="deepseek-v4-flash-0731",
+        baseUrl=demo.get("LLM_BASE_URL"),
+    )
+    content = yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
+    load_agentkit_config(content)
     async with NacosClient(nacos_bootstrap()) as client:
-        for kind, config in (
-            ("runtime", runtime),
-            ("models", models),
-            ("policies", policies),
-        ):
-            data_id = f"agentkit-{kind}.yaml"
-            # Inspect the actual response code; a network/auth error is not
-            # permission to overwrite an existing configuration.
-            response = await client.http.get(
-                client.bootstrap.server_url + "/nacos/v3/client/cs/config",
-                params={
-                    "namespaceId": client.bootstrap.namespace_id,
-                    "groupName": client.bootstrap.group,
-                    "dataId": data_id,
-                },
-                headers=client._headers(),
-            )
-            response.raise_for_status()
-            envelope = response.json()
-            if envelope.get("code") == 20004:
-                await client.publish_config(
-                    data_id, yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
-                )
-                print(f"Created Nacos {data_id}")
-            elif envelope.get("code") == 0:
-                print(f"Preserved existing Nacos {data_id}")
-            else:
-                raise RuntimeError(
-                    "Nacos configuration lookup failed; nothing overwritten"
-                )
         provider = NacosConfigProvider(client)
-        await provider.refresh()
-        print(f"Validated Nacos configuration batch {provider.snapshot.config_version}")
+        try:
+            current = await provider.refresh()
+        except NacosError as exc:
+            if exc.operation_code != CONFIG_NOT_FOUND_CODE:
+                raise
+            await client.publish_config(AGENTKIT_DATA_ID, content)
+            print(f"Created Nacos {AGENTKIT_DATA_ID}")
+            current = await provider.refresh()
+        else:
+            print(f"Preserved existing Nacos {AGENTKIT_DATA_ID}")
+        print(f"Validated Nacos revision {current.revision}")
     print(
         f"Deployment secrets saved with mode0600 to {env_path}; no secret values printed"
     )

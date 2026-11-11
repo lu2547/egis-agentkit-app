@@ -6,7 +6,10 @@ build-backend = "hatchling.build"
 name = "egis-agentkit-app"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["egis-agentkit-framework[cluster]", "python-dotenv>=1.0", "uvicorn>=0.30"]
+dependencies = [
+  "egis-agentkit-framework[cluster]", "python-dotenv>=1.0", "uvicorn>=0.30",
+  "PyJWT[crypto]>=2.10,<3",
+]
 
 [project.scripts]
 egis-agentkit = "egis_agentkit_app.main:main"

@@ -1,4 +1,4 @@
-"""Compatibility entry point aggregating management HTTP controllers."""
+"""Aggregate the management HTTP controllers."""
 
 from fastapi import APIRouter
 
@@ -12,7 +12,6 @@ from .controllers import (
     session,
     team,
     user,
-    workspace,
 )
 
 router = APIRouter(prefix="/manager", tags=["manager"])
@@ -24,7 +23,6 @@ for controller in (
     model,
     session,
     project,
-    workspace,
     resource,
     user,
     composer,

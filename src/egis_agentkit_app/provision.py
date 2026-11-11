@@ -1,29 +1,28 @@
 """Explicit additive provisioning and named demo fixtures; never run on serve."""
 
+import io
 import os
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
+from zipfile import ZIP_DEFLATED, ZipFile
 
-from agentscope.app.storage import AsyncSQLAlchemyStorage
-from egis_agentkit.config import NacosClient, NacosConfigProvider
-from egis_agentkit.extensions.hub import NacosMCPHub, NacosSkillHub
-from egis_agentkit.extensions.message_bus import EgisMessageBus
-from egis_agentkit.extensions.package import PackageLoader
-from egis_agentkit.models import Asset, Definition, Grant, Group
-from egis_agentkit.service.access import PermissionService
-from egis_agentkit.service.agent import AgentService
-from egis_agentkit.service.agent.package import PackageService
-from egis_agentkit.service.resource.service import (
-    mcp_config_checksum,
-    skill_archive_digest,
-)
-from egis_agentkit.service.team import TeamService
-from egis_agentkit.service.user import UserService
+from egis_agentkit.backend._postgres import create_postgres_engine
+from egis_agentkit.backend.nacos import NacosClient, NacosConfigProvider
+from egis_agentkit.backend.nacos._config import LivePolicies
+from egis_agentkit.extension._demo_report_tool_impl import deploy_demo_report_tools
+from egis_agentkit.extension._message_bus_impl import EgisMessageBus
+from egis_agentkit.service._user import UserService
+from egis_agentkit.service.access._grant import GrantService
+from egis_agentkit.service.agent._expert_definition import ExpertDefinition
+from egis_agentkit.service.agent._personal_definition import PersonalDefinition
+from egis_agentkit.service.resource._catalog import ResourceService
+from egis_agentkit.service.team._definition import TeamDefinition
 from egis_agentkit.storage import AgentKitStorage
 from egis_agentkit.storage import tables as t
-from sqlalchemy import select, update
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import create_async_engine
+from egis_agentkit.storage._schema import cleanup_schema
+from egis_agentkit.storage._workspace import WorkspaceFiles
+from egis_agentkit.storage.model import Definition, Grant, Group
+from sqlalchemy import select
 
 from .bootstrap import nacos_bootstrap
 
@@ -32,43 +31,59 @@ def identifier(name):
     return uuid5(NAMESPACE_URL, "egis-agentkit-demo:" + name).hex
 
 
-async def provision(command):
+async def provision(command, *, database=None, apply=False):
     async with NacosClient(nacos_bootstrap()) as client:
         provider = NacosConfigProvider(client)
         await provider.refresh()
-        settings = provider.snapshot.runtime
-        url = os.environ[settings.database_url_env]
-        engine = create_async_engine(url, pool_pre_ping=True, hide_parameters=True)
-        storage = AgentKitStorage(url, engine)
-        bus = EgisMessageBus(
-            deployment_mode=settings.deployment_mode,
-            engine=engine,
-            kafka_bootstrap_servers=settings.kafka_bootstrap_servers,
-            topic_prefix=settings.kafka_topic_prefix,
+        settings = provider.snapshot
+        postgres = settings.backend.postgres
+        url = os.environ[postgres.connection.url_env]
+        engine = create_postgres_engine(
+            url,
+            pool_size=postgres.pool.size,
+            max_overflow=postgres.pool.max_overflow,
         )
         try:
-            if command == "migrate":
-                # Native create_all is additive and preserves any existing
-                # AgentScope records. Existing-column upgrades remain native
-                # Alembic deployment operations, not private schema rewrites.
-                async with AsyncSQLAlchemyStorage(
-                    url, engine=engine, create_tables=True
-                ):
-                    pass
-                await storage.migrate_enterprise()
-                await bus.migrate()
+            if command in {"cleanup-db", "upgrade-db"}:
+                if command == "upgrade-db":
+                    from egis_agentkit.storage._schema import upgrade_schema
+
+                    operation = upgrade_schema
+                else:
+                    operation = cleanup_schema
+                result = await operation(engine, database=database, apply=apply)
+                print(f"目标数据库 {result.database}，schema {result.schema}")
+                for name, state in result.tables.items():
+                    print(f"{name:<28} {state}")
+                return
+
+            storage = AgentKitStorage(url, engine)
+            resources = ResourceService(
+                storage,
+                settings.workspace.runtime.root,
+                policies=LivePolicies(provider),
+                config=provider,
+            )
+            deploy_demo_report_tools(
+                resources.tool_registry, WorkspaceFiles(settings.workspace.runtime.root)
+            )
+            bus = EgisMessageBus(engine=engine, kafka=settings.backend.kafka)
+            if command == "init-db":
+                await storage.init_schema()
+                await resources.seed_builtin_tools()
+
+                await bus.init_schema()
                 await bus.ensure_topics()
-                print(
-                    "Provisioned native/enterprise PG tables and Kafka topics; existing rows preserved"
-                )
+                print("已初始化 AgentScope、AgentKit 数据表和消息总线")
                 return
             async with storage:
-                await seed_demo(storage, provider, client)
+                await resources.seed_builtin_tools()
+                await seed_demo(storage, provider, resources)
         finally:
             await engine.dispose()
 
 
-async def seed_demo(storage, provider, client):
+async def seed_demo(storage, provider, resources):
     users = UserService(storage)
     await users.sync_identity("demo.admin", "演示管理员")
     await users.provision_admin("demo.admin", actor="explicit-demo-seed")
@@ -80,87 +95,47 @@ async def seed_demo(storage, provider, client):
         if "egis-demo" not in user.group_ids:
             user.group_ids.append("egis-demo")
             await users.update_user(admin, user)
-    loader = PackageLoader([Path(p) for p in provider.snapshot.runtime.release_roots])
-    packages = PackageService(storage, loader)
-    releases = Path(provider.snapshot.runtime.release_roots[0]) / "egis-demo"
-    for version in ("1.0.0", "1.1.0"):
-        await packages.register(admin, releases / version, owner_id="egis-demo")
-
-    # These administrative imports catalog the two already published PRIVATE
-    # Nacos demo sources. This callback is confined to this explicit seed CLI.
-    async def seed_read(*_):
-        return True
-
-    skill = await NacosSkillHub(client, authorize=seed_read).get_skill_version(
-        "demo.admin", "egis-demo-report", "1.0.0"
-    )
-    mcp = await NacosMCPHub(client, authorize=seed_read).get_mcp_version(
-        "demo.admin", "egis-demo-tools", "1.0.0"
-    )
-    archive = await NacosSkillHub(client, authorize=seed_read).download(
-        "demo.admin", "egis-demo-report", "1.0.0"
-    )
-    content = bytearray()
-    try:
-        async for chunk in archive.stream:
-            content.extend(chunk)
-            if len(content) > provider.snapshot.policies.max_skill_archive_bytes:
-                raise ValueError("演示 Skill 包超过上传限制")
-    finally:
-        await archive.stream.aclose()
-    checksums = {
-        "skill": skill_archive_digest(bytes(content)),
-        "mcp": mcp_config_checksum(
-            {"transport": "streamable_http", "url": mcp.config_template.url}
-        ),
-    }
-    for kind, name, display, description in (
-        ("skill", "egis-demo-report", "结构化报告", skill.description),
-        ("mcp", "egis-demo-tools", "报告与计算连接器", mcp.description),
-    ):
-        asset = Asset(
-            resource_type=kind,
-            resource_id=name,
-            resource_version="1.0.0",
+    if await storage.assets.get("skill", "egis-demo-report", "1.0.0") is None:
+        default_skill = (
+            Path(__file__).resolve().parents[4]
+            / "demo/agentscope-demo/agentkit_demo/hub_cases/egis-demo-report"
+        )
+        skill_dir = Path(os.environ.get("EGIS_DEMO_SKILL_DIR", str(default_skill)))
+        if not (skill_dir / "SKILL.md").is_file():
+            raise ValueError("请配置 EGIS_DEMO_SKILL_DIR 指向演示 Skill 目录")
+        archive = io.BytesIO()
+        with ZipFile(archive, "w", ZIP_DEFLATED) as output:
+            for file in sorted(skill_dir.rglob("*")):
+                if file.is_file():
+                    output.write(file, file.relative_to(skill_dir))
+        await resources.upload_skill(
+            admin,
+            archive.getvalue(),
+            "1.0.0",
+            category="数据分析",
+            resource_id="egis-demo-report",
             owner_type="system",
             owner_id="egis-demo",
-            checksum_sha256=checksums[kind],
-            download_url=f"nacos://{kind}/{name}/1.0.0",
-            payload={
-                "nacos_name": name,
-                "display_name": display,
-                "description": description,
-                **({"is_skill_market_visible": True} if kind == "skill" else {}),
+        )
+    if await storage.assets.get("mcp", "egis-demo-tools", "1.0.0") is None:
+        await resources.save_mcp(
+            admin,
+            {
+                "resource_id": "egis-demo-tools",
+                "resource_version": "1.0.0",
+                "owner_type": "system",
+                "owner_id": "egis-demo",
+                "display_name": "报告与计算连接器",
+                "config": {
+                    "transport": "streamable_http",
+                    "url": os.environ.get(
+                        "EGIS_DEMO_MCP_URL", "http://127.0.0.1:8766/mcp"
+                    ),
+                },
             },
         )
-        async with storage.transaction() as conn:
-            await conn.execute(
-                insert(t.assets)
-                .values(
-                    **asset.model_dump(),
-                    created_by=admin.user_id,
-                    updated_by=admin.user_id,
-                )
-                .on_conflict_do_nothing()
-            )
-            # Trusted, explicit enrollment of the named V1 demo fixtures only.
-            # Never overwrite a previously pinned source with a changed hash.
-            await conn.execute(
-                update(t.assets)
-                .where(
-                    t.assets.c.resource_type == kind,
-                    t.assets.c.resource_id == name,
-                    t.assets.c.resource_version == "1.0.0",
-                    t.assets.c.owner_type == "system",
-                    t.assets.c.owner_id == "egis-demo",
-                    t.assets.c.checksum_sha256 == "",
-                )
-                .values(checksum_sha256=checksums[kind])
-            )
-    agents, permissions = (
-        AgentService(storage, provider.snapshot.policies),
-        PermissionService(storage, provider.snapshot.policies),
-    )
+    agents = ExpertDefinition(storage, provider.snapshot.access)
+    grants = GrantService(storage)
     bindings = [
         {
             "resource_type": kind,
@@ -168,7 +143,11 @@ async def seed_demo(storage, provider, client):
             "resource_version": "1.0.0",
             "resource_view_type": "system",
         }
-        for kind, name in (("skill", "egis-demo-report"), ("mcp", "egis-demo-tools"))
+        for kind, name in (
+            ("skill", "egis-demo-report"),
+            ("mcp", "egis-demo-tools"),
+            ("tool", "CreateDemoReport"),
+        )
     ]
     examples = [
         (
@@ -219,10 +198,12 @@ async def seed_demo(storage, provider, client):
         definition_id = identifier(name)
         async with storage.engine.connect() as conn:
             exists = await conn.scalar(
-                select(t.definitions.c.id).where(t.definitions.c.id == definition_id)
+                select(t.agent_definitions.c.id).where(
+                    t.agent_definitions.c.id == definition_id
+                )
             )
         if not exists:
-            await agents.save(
+            await agents.build(
                 admin,
                 Definition(
                     id=definition_id,
@@ -236,10 +217,6 @@ async def seed_demo(storage, provider, client):
                         "tags": [category, "演示案例"],
                         "avatar": avatar,
                         "bindings": bindings,
-                        "implementation": {
-                            "assembly_ref": "egis-demo",
-                            "assembly_version": "1.0.0",
-                        },
                         "system_prompt": f"你是{display}。{description} 用中文回答。需要交付文件时调用 CreateDemoReport，把完整报告写入交付目录并告诉用户文件名。先用 Skill 阅读报告规范。计算任务可使用连接器。工具结果必须核验，不能捏造引用。",
                         "starter_prompts": [
                             "把这些需求整理成一份报告并交付 report.md",
@@ -251,11 +228,11 @@ async def seed_demo(storage, provider, client):
         if index < 5:
             # Explicit administrator action, separate from registration. No
             # grant is silently added by runtime/installation/definition save.
-            await permissions.grant(
+            await grants.grant(
                 admin,
                 Grant(
-                    principal_type="all_users",
-                    principal_id="*",
+                    principal_type="group",
+                    principal_id="egis-demo",
                     resource_type="agent",
                     resource_id=definition_id,
                     resource_view_type="system",
@@ -267,10 +244,12 @@ async def seed_demo(storage, provider, client):
     team_id = identifier("report-team")
     async with storage.engine.connect() as conn:
         exists = await conn.scalar(
-            select(t.definitions.c.id).where(t.definitions.c.id == team_id)
+            select(t.team_definitions.c.id).where(t.team_definitions.c.id == team_id)
         )
     if not exists:
-        await TeamService(storage, provider.snapshot.policies).save(
+        await TeamDefinition(
+            storage, provider.snapshot.access, config_provider=provider
+        ).save(
             admin,
             {
                 "id": team_id,
@@ -298,7 +277,7 @@ async def seed_demo(storage, provider, client):
                 ],
             },
         )
-    await permissions.grant(
+    await grants.grant(
         admin,
         Grant(
             principal_type="group",
@@ -310,10 +289,11 @@ async def seed_demo(storage, provider, client):
             resource_owner_id="egis-demo",
         ),
     )
+    personal = PersonalDefinition(storage, provider.snapshot.access)
     for uid in ("demo.admin", "demo.user"):
-        await agents.personal(await users.get(uid))
+        await personal.build(await users.get(uid))
     print(
-        "Seeded demo.admin/demo.user, one Group, six experts, one fixed Team, two package versions and two Nacos catalog sources"
+        "Seeded demo.admin/demo.user, one Group, six experts, one fixed Team, local Skill/MCP catalog and deployed report tool"
     )
     print(
         "Five expert grants and one Group Team grant explicitly configured; finance expert remains denied"

@@ -1,10 +1,9 @@
-"""Grants and sharing review HTTP endpoints."""
+"""精确发布版本的直接授权与共享审批接口。"""
 
-from egis_agentkit.errors import Forbidden
-from egis_agentkit.models import Grant
+from egis_agentkit.storage.model import Grant
 from fastapi import APIRouter, Depends, Request, Response
 
-from ..schema import DecisionWrite, ShareWrite
+from ..schema import DecisionWrite, GrantWrite, ShareWrite
 from ..security import current_user
 from .dependencies import services
 
@@ -13,9 +12,18 @@ router = APIRouter()
 
 @router.post("/share-requests", status_code=201)
 async def request_share(body: ShareWrite, request: Request, user=Depends(current_user)):
+    """提交首次共享、追加受众或升级当前共享版本。"""
     return await services(request).sharing.submit(
-        user, body.resource_type, body.resource_id, body.resource_version
+        user,
+        body.resource_type,
+        body.resource_id,
+        target=body.target,
     )
+
+
+@router.get("/share-recipients")
+async def share_recipients(request: Request, user=Depends(current_user)):
+    return {"items": await services(request).sharing.recipients(user)}
 
 
 @router.get("/share-requests")
@@ -25,19 +33,23 @@ async def list_shares(request: Request, user=Depends(current_user)):
 
 @router.get("/admin/grants")
 async def grants(request: Request, user=Depends(current_user)):
-    return {"items": await services(request).permissions.list_grants(user)}
+    return {"items": await services(request).grants.list_grants(user)}
+
+
+@router.get("/admin/grant-resources")
+async def grant_resources(request: Request, user=Depends(current_user)):
+    return {"items": await services(request).grants.grantable_resources(user)}
 
 
 @router.post("/admin/grants")
-async def grant(body: Grant, request: Request, user=Depends(current_user)):
-    if body.grant_source_type != "manual":
-        raise Forbidden("共享授权只能由审核用例创建")
-    return await services(request).permissions.grant(user, body)
+async def grant(body: GrantWrite, request: Request, user=Depends(current_user)):
+    """由管理员直接授权；审批授权由共享服务创建。"""
+    return await services(request).grants.grant(user, Grant(**body.model_dump()))
 
 
 @router.delete("/admin/grants/{identifier}", status_code=204)
 async def revoke_grant(identifier: str, request: Request, user=Depends(current_user)):
-    await services(request).permissions.revoke(user, identifier)
+    await services(request).grants.revoke(user, identifier)
     return Response(status_code=204)
 
 

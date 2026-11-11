@@ -20,8 +20,10 @@ def file_response(content, media_type, path):
 
 
 def saved_definition(row):
+    """返回新发布定义的精确版本和所属视图。"""
     return {
         **row,
+        "resource_version": str(row["config_version"]),
         "resource_view_type": "system" if row["owner_type"] == "system" else "private",
         "is_editable": True,
     }

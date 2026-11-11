@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 from agentscope.app.message_bus import MessageBusKeys
 from dotenv import load_dotenv
-from egis_agentkit.extensions.message_bus import EgisMessageBus
+from egis_agentkit.extension._message_bus_impl import EgisMessageBus
 from egis_agentkit.storage import AgentKitStorage
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -53,6 +53,7 @@ async def main():
                 "/manager/tasks",
                 json={
                     "definition_id": source["id"],
+                    "resource_version": source["resource_version"],
                     "resource_view_type": "system",
                     "name": "专家团往返验收",
                 },

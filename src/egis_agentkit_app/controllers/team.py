@@ -1,6 +1,9 @@
-"""Team definition HTTP endpoints."""
+"""专家团定义和发布版本接口。"""
 
-from fastapi import APIRouter, Depends, Request, Response
+from typing import Annotated
+
+from egis_agentkit.storage.model import ViewType
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from ..schema import TeamWrite
 from ..security import current_user
@@ -17,9 +20,24 @@ async def list_teams(request: Request, user=Depends(current_user)):
 
 @router.get("/teams/{identifier}")
 async def get_team(
-    identifier: str, request: Request, view: str = "private", user=Depends(current_user)
+    identifier: str,
+    request: Request,
+    view: ViewType = "private",
+    resource_version: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
+    user=Depends(current_user),
 ):
-    return await services(request).definition_details.get(user, identifier, view, "team")
+    """读取指定的专家团版本，包括该版本固定的成员引用。"""
+    return await services(request).teams.read(
+        user, identifier, view, version=resource_version
+    )
+
+
+@router.get("/teams/{identifier}/versions")
+async def team_versions(
+    identifier: str, request: Request, user=Depends(current_user)
+):
+    """列出用户有权查看的专家团发布版本。"""
+    return {"items": await services(request).teams.versions(user, identifier)}
 
 
 async def save_team(request, user, body, identifier=None):

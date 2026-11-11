@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Literal
 
 from agentscope.permission import PermissionMode
+from egis_agentkit.storage.model import DefinitionRef, ShareTarget
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -10,6 +11,7 @@ class Request(BaseModel):
 
 
 class AgentWrite(Request):
+    agent_type: Literal["expert", "remote"] = "expert"
     agent_name: str
     agent_display_name: str
     payload: dict
@@ -22,7 +24,7 @@ class TeamWrite(Request):
     team_name: str
     team_display_name: str
     orchestrator_config: dict
-    members: list[dict]
+    members: list[DefinitionRef] = Field(min_length=1)
     payload: dict = Field(default_factory=dict)
     config_version: int = Field(default=1, ge=1)
     owner_type: Literal["user", "system"] = "user"
@@ -33,23 +35,25 @@ class TaskWrite(Request):
     project_id: str | None = Field(default=None, max_length=64)
     definition_id: str
     resource_view_type: Literal["private", "system", "shared"]
-    name: str | None = Field(default=None, max_length=200)
+    resource_version: str | None = Field(default=None, min_length=1, max_length=128)
+    name: str | None = None
     model_key: str | None = None
-    permission_mode: PermissionMode = PermissionMode.DEFAULT
+    permission_mode: PermissionMode | None = None
 
 
 class CollaboratorRef(Request):
     definition_id: str = Field(min_length=1, max_length=128)
     resource_view_type: Literal["private", "system", "shared"]
+    resource_version: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class TaskCollaboratorsWrite(Request):
-    request_id: str = Field(min_length=1, max_length=128)
-    experts: list[CollaboratorRef] = Field(max_length=16)
+    request_id: str = Field(min_length=1)
+    experts: list[CollaboratorRef]
 
 
 class TaskNameWrite(Request):
-    name: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1)
 
 
 class ProjectWrite(Request):
@@ -62,9 +66,21 @@ class TaskSettingsWrite(Request):
 
 
 class ShareWrite(Request):
+    """没有接收对象时，为当前受众提交一次版本升级。"""
+
     resource_type: Literal["agent", "team", "skill", "mcp"]
-    resource_id: str
-    resource_version: str | None = None
+    resource_id: str = Field(min_length=1, max_length=128)
+    target: ShareTarget | None = None
+
+
+class GrantWrite(ShareTarget):
+    """直接授权绑定资源身份、视图及受众。"""
+
+    resource_type: Literal["agent", "team", "skill", "mcp"]
+    resource_id: str = Field(min_length=1, max_length=128)
+    resource_view_type: Literal["system", "shared"]
+    resource_owner_type: Literal["user", "system"]
+    resource_owner_id: str
 
 
 class DecisionWrite(Request):
@@ -86,9 +102,9 @@ class DeliveryWrite(Request):
 
 
 class PreferencesWrite(Request):
-    agent_md: str = Field(max_length=64000)
-    soul_md: str = Field(max_length=64000)
-    user_md: str = Field(max_length=64000)
+    agent_md: str
+    soul_md: str
+    user_md: str
 
 
 class SkillImportJob(BaseModel):

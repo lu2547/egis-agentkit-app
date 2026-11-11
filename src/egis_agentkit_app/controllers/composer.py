@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 
 from ..security import current_user
 from .dependencies import services
@@ -14,9 +14,9 @@ router = APIRouter()
 async def composer_options(
     request: Request,
     category: Literal["context", "experts", "skills", "commands"],
-    query: str = Query("", max_length=500),
-    cursor: str | None = Query(None, max_length=2048),
-    limit: int = Query(10, ge=1, le=10),
+    query: str = "",
+    cursor: str | None = None,
+    limit: int | None = None,
     session_id: str | None = None,
     project_id: str | None = None,
     user=Depends(current_user),

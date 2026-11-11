@@ -1,7 +1,7 @@
 """Identity, user administration and preferences HTTP endpoints."""
 
 from egis_agentkit.errors import Forbidden
-from egis_agentkit.models import Group, User
+from egis_agentkit.storage.model import Group, User
 from fastapi import APIRouter, Depends, Request
 
 from ..schema import PreferencesWrite
@@ -18,14 +18,14 @@ async def me(user=Depends(current_user)):
 
 @router.get("/preferences")
 async def preferences(request: Request, user=Depends(current_user)):
-    return await services(request).preferences.read(user)
+    return await services(request).personal_definition.read_documents(user)
 
 
 @router.put("/preferences")
 async def update_preferences(
     body: PreferencesWrite, request: Request, user=Depends(current_user)
 ):
-    return await services(request).preferences.save(user, body.model_dump())
+    return await services(request).personal_definition.save_documents(user, body.model_dump())
 
 
 @router.get("/admin/users")

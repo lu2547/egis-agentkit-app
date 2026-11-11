@@ -10,6 +10,8 @@ import httpx
 from agentscope.event import UserConfirmResultEvent
 from dotenv import load_dotenv
 
+from egis_agentkit_app.provision import identifier
+
 APP = Path(__file__).resolve().parents[1]
 
 
@@ -104,21 +106,35 @@ async def main(check_hitl, check_stop):
         )
         login.raise_for_status()
         client.headers["Authorization"] = "Bearer " + login.json()["access_token"]
-        response = await client.get("/manager/agents")
-        response.raise_for_status()
-        catalog = response.json()["items"]
+        catalog = []
+        params = {}
+        while True:
+            response = await client.get("/manager/agents", params=params)
+            response.raise_for_status()
+            page = response.json()
+            catalog.extend(page["items"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+            params = {"cursor": cursor}
         selected = next(row for row in catalog if row["agent_name"] == "report-analyst")
         assert selected["is_usable"]
-        denied = next(row for row in catalog if row["agent_name"] == "finance-advisor")
+        denied_id = identifier("finance-advisor")
+        assert all(row["id"] != denied_id for row in catalog)
         blocked = await client.post(
             "/manager/tasks",
-            json={"definition_id": denied["id"], "resource_view_type": "system"},
+            json={
+                "definition_id": denied_id,
+                "resource_view_type": "system",
+                "resource_version": "1",
+            },
         )
         assert blocked.status_code == 403
         response = await client.post(
             "/manager/tasks",
             json={
                 "definition_id": selected["id"],
+                "resource_version": selected["resource_version"],
                 "resource_view_type": "system",
                 "name": "模型与交付验收",
             },
@@ -131,13 +147,12 @@ async def main(check_hitl, check_stop):
             task,
             "请调用 CreateDemoReport，标题“企业 AgentKit 联调报告”，findings为[“PG与Nacos已连接”,“Kafka消费组已启用”,“产物可在右侧预览”]，交付report.md。无需额外检索，不使用Bash。最后用一句中文告知文件名。",
         )
-        response = await client.get(
-            f"/manager/tasks/{task['session_id']}/files", params={"area": "artifacts"}
-        )
+        project_path = f"/manager/projects/{task['project_id']}"
+        response = await client.get(f"{project_path}/files", params={"area": "artifacts"})
         response.raise_for_status()
         assert any(row["name"] == "report.md" for row in response.json()["items"])
         artifact = await client.get(
-            f"/manager/tasks/{task['session_id']}/file",
+            f"{project_path}/file",
             params={"area": "artifacts", "path": "report.md"},
         )
         artifact.raise_for_status()
@@ -147,18 +162,19 @@ async def main(check_hitl, check_stop):
         )
         assistant = (await client.get("/manager/assistant")).json()
         if check_hitl:
-            from egis_agentkit.config import NacosClient, NacosConfigProvider
+            from egis_agentkit.backend.nacos import NacosClient, NacosConfigProvider
 
             from egis_agentkit_app.bootstrap import nacos_bootstrap
 
             async with NacosClient(nacos_bootstrap()) as nacos:
                 provider = NacosConfigProvider(nacos)
                 await provider.refresh()
-                workspace_root = Path(provider.snapshot.runtime.workspace_root)
+                workspace_root = Path(provider.snapshot.workspace.runtime.root)
             response = await client.post(
                 "/manager/tasks",
                 json={
                     "definition_id": assistant["id"],
+                    "resource_version": assistant["resource_version"],
                     "resource_view_type": "private",
                     "name": "人工确认验收",
                 },
@@ -181,7 +197,7 @@ async def main(check_hitl, check_stop):
             assert summary["hitl"]["confirmations"] >= 1
             assert len(summary["hitl"]["reply_ids"]) == 1
             result = await client.get(
-                f"/manager/tasks/{hitl_task['session_id']}/file",
+                f"/manager/projects/{hitl_task['project_id']}/file",
                 params={"area": "work", "path": "check.txt"},
             )
             result.raise_for_status()
@@ -192,6 +208,7 @@ async def main(check_hitl, check_stop):
                 "/manager/tasks",
                 json={
                     "definition_id": assistant["id"],
+                    "resource_version": assistant["resource_version"],
                     "resource_view_type": "private",
                     "name": "原生停止验收",
                 },
