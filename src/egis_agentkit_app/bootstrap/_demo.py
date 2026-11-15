@@ -180,7 +180,9 @@ async def seed_demo(storage, provider, resources):
     team_id = identifier("report-team")
     async with storage.engine.connect() as conn:
         exists = await conn.scalar(
-            select(t.team_definitions.c.id).where(t.team_definitions.c.id == team_id)
+            select(t.team_definition_summary.c.id).where(
+                t.team_definition_summary.c.id == team_id
+            )
         )
     if not exists:
         await TeamDefinition(

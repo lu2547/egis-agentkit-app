@@ -14,6 +14,6 @@ class TeamWrite(Request):
     orchestrator_config: dict
     members: list[DefinitionRef] = Field(min_length=1)
     payload: dict = Field(default_factory=dict)
-    config_version: int = Field(default=1, ge=1)
+    owner_version: int = Field(default=1, ge=1)
     owner_type: Literal["user", "system"] = "user"
     owner_id: str | None = None

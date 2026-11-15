@@ -8,8 +8,8 @@ from agentscope.app.deps import get_current_user_id
 from egis_agentkit.bootstrap import init_agentkit
 from egis_agentkit.client.identity import JWTIdentity
 from egis_agentkit.client.nacos import NacosClient, NacosConfigProvider
-from egis_agentkit.extension._http_identity_middleware_impl import IdentityGuard
-from egis_agentkit.extension._stream_ready_middleware_impl import StreamReady
+from egis_agentkit.extension.http._http_identity_middleware_impl import IdentityGuard
+from egis_agentkit.extension.http._stream_ready_middleware_impl import StreamReady
 from fastapi.middleware import Middleware
 
 from ..controller.base import native_user_id, register_exception_handlers
