@@ -6,6 +6,7 @@ from ..controller import (
     access,
     agent,
     composer,
+    knowledge,
     model,
     project,
     resource,
@@ -28,6 +29,7 @@ for controller in (
     project,
     resource,
     user,
+    knowledge,
     composer,
 ):
     manager_router.include_router(controller.router)

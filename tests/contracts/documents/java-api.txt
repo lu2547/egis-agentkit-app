@@ -1,0 +1,843 @@
+Java 端接口文档（egis-ai-kb-service-app）
+依据 egis-ai-kb-service-app 实际 Controller / DTO 源码整理，包含每个接口的路径、方法、入参、出参、字段说明与调用示例。与前端演示原型对应的接口清单见 docs/api.md；Java/Python 职责划分见 docs/java-side.md。
+1. 通用约定
+1.1 基础地址
+项 | 说明
+服务名 | kb-service-app（Spring Boot）
+本地/直连 | http://{host}:{port}/knowledge（server.servlet.context-path=/knowledge）
+前端/网关 | 同源 /knowledge 前缀，如 https://{gateway}/knowledge/kb
+文档内变量 | BASE_URL 表示上表基础地址（含可选网关前缀）
+1.2 认证
+普通业务接口使用 JWT Cookie 认证，由 JwtAuthInterceptor 校验：
+项 | 说明
+Cookie 名 | kb_auth_token（jwtProperties.cookieName 默认值，可由 Nacos 覆盖）
+兜底 SSO | JWT 无效/缺失时尝试 CAS_SSO_COOKIE（CAS 单点登录自动换取 JWT）
+免认证路径 | /auth/authenticate、/auth/public-keys、/v1/health、/openapi/**、/error
+失败响应 | HTTP 401，响应体 {"code":1001,"message":"未登录或登录已过期","data":null,"success":false}
+备注 | /openapi/** 使用独立 HMAC-SHA256 签名认证，见第 11 节。
+1.3 统一响应壳
+{"code":0,"message":"OK","data":{}}
+字段 | 类型 | 说明
+code | int | 0 成功，非 0 为错误码
+message | String | 结果描述
+data | T | 业务数据，无返回时为 null
+success | boolean | 序列化时由 isSuccess() 派生，code==0 时为 true
+1.4 分页结构
+{"total":100,"items":[]}
+字段 | 类型 | 说明
+total | long | 总记录数
+items | T[] | 当前页数据
+分页参数命名不统一：/kb、/wiki、/v1/reviews 用 page + pageSize/size；/v1/tasks 用 limit + offset。
+1.5 错误码
+code | 枚举 | 说明
+0 | SUCCESS | 成功
+1000 | BAD_REQUEST | 请求参数错误
+1001 | UNAUTHORIZED | 未授权 / 未登录
+1002 | FILE_UNREADABLE | 文件不可读
+1003 | PARSE_FAILED | 文档解析失败
+1004 | NOT_FOUND | 资源不存在
+1005 | CONFLICT | 资源冲突
+1006 | FORBIDDEN | 无权限访问该资源
+5000 | INTERNAL_ERROR | 服务内部错误
+1.6 数据格式约定
+时间字段为 LocalDateTime，JSON 默认格式 yyyy-MM-dd'T'HH:mm:ss（如 2026-10-31T12:00:00）。字段命名默认驼峰（camelCase），仅个别接口入参使用下划线（Controller 显式写明的 tag_id、restore_placeholder 查询参数等）。文件大小、版本号等在部分 VO 中为已格式化的展示字符串（如 size="1.2 MB"、version="v1"），DocDetailVO 同时提供原始字节数。
+2. 认证接口
+基路径：/auth（AuthController）
+2.1 获取 SM2 公钥
+GET /auth/public-keys
+无需登录。前端用该公钥对登录密码做 SM2 加密。
+响应 data（PublicKeyResponse）
+字段 | 类型 | 说明
+pubX | String | 公钥 X 分量
+pubY | String | 公钥 Y 分量
+curl -s "$BASE_URL/auth/public-keys"
+{"code":0,"message":"OK","data":{"pubX":"...","pubY":"..."}}
+2.2 账号密码登录
+POST /auth/authenticate    Content-Type: application/json
+无需登录。成功后服务端下发 JWT Cookie（kb_auth_token），可能同时设置 CAS_SSO_COOKIE。
+请求体（LoginRequest）
+字段 | 类型 | 必填 | 说明
+userId | String | 是 | 用户 ID
+password | String | 是 | 前端 SM2 加密后的密码
+validCode | String | 否 | 验证码
+loginType | String | 否 | 登录类型
+响应 data（LoginResponse）
+字段 | 类型 | 说明
+userId | String | 用户 ID
+userName | String | 用户名称
+curl -s -c cookie.txt -X POST "$BASE_URL/auth/authenticate" \  -H "Content-Type: application/json" \  -d '{"userId":"u1001","password":"<SM2密文>","validCode":"","loginType":"PWD"}'
+2.3 当前用户信息
+GET /auth/me
+响应 data（MeResponse）
+字段 | 类型 | 说明
+userId | String | 用户 ID
+userName | String | 用户名称
+groups | GroupInfo[] | 用户所属资源组列表
+GroupInfo
+字段 | 类型 | 说明
+name | String | 组展示名称
+value | String | 组编码/权限标识
+curl -s -b cookie.txt "$BASE_URL/auth/me"
+2.4 登出
+POST /auth/logout
+清除 JWT / SSO Cookie，data 为 null。
+2.5 模糊查询用户
+GET /auth/users?userName={keyword}&userId={keyword}
+查询参数 | 类型 | 必填 | 说明
+userName | String | 否 | 用户名模糊匹配
+userId | String | 否 | 用户 ID 模糊匹配
+响应 data（UserSearchVO[]）
+字段 | 类型 | 说明
+userId | String | 用户 ID
+userName | String | 用户名
+userCode | String | 用户工号/编码
+userDesc | String | 用户描述
+curl -s -b cookie.txt "$BASE_URL/auth/users?userName=张"
+2.6 资源组树
+GET /auth/treeGroup?filter={true|false}
+查询参数 | 类型 | 默认 | 说明
+filter | String | false | true 时仅保留 view/edit/manager 节点
+响应 data（LabelGroupTree[]）
+字段 | 类型 | 说明
+label | String | 展示名称
+value | String | 组编码
+children | LabelGroupTree[] | 子节点
+3. 知识库接口
+基路径：/kb（KbController）
+3.1 分页查询知识库
+GET /kb?scope={all|personal|enterprise|public}&keyword={kw}&page={n}&pageSize={n}
+查询参数 | 类型 | 默认 | 说明
+scope | String | all | 范围分类：all / personal / enterprise / public
+keyword | String | — | 名称模糊搜索
+page | int | 1 | 页码
+pageSize | int | 20 | 每页条数
+响应 data：PageResult<KbCardVO>
+KbCardVO（继承 CardBaseVO）
+字段 | 类型 | 说明
+id | String | 知识库 ID
+type | String | 类型（personal/enterprise/public）
+title | String | 名称
+desc | String | 描述
+owner | String | 属主 ID
+ownerName | String | 属主显示名
+pinned | Boolean | 是否置顶
+lastUpdate | LocalDateTime | 最后更新时间
+count | String | 文档数量（字符串）
+chunkingConfig | String | 分片配置 JSON 字符串
+parserConfig | String | 解析器配置 JSON 字符串
+curl -s -b cookie.txt "$BASE_URL/kb?scope=all&keyword=年金&page=1&pageSize=20"
+{  "code":0,"message":"OK",  "data":{    "total":1,    "items":[{      "id":"kb_001","type":"enterprise","title":"年金业务部",      "desc":"年金政策与基础知识","owner":"u1001","ownerName":"张三",      "pinned":true,"lastUpdate":"2026-10-31T10:00:00",      "count":"128","chunkingConfig":"{\"strategy\":\"hierarchical\"}","parserConfig":"{}"    }]  }}
+3.2 创建知识库
+POST /kb    Content-Type: application/json
+请求体（KbCreateRequest，继承 KbBaseRequest）
+字段 | 类型 | 必填 | 说明
+name | String | 是 | 知识库名称
+description | String | 否 | 描述
+chunkingConfig | String | 否 | 分片配置 JSON 字符串
+parserConfig | String | 否 | 解析器配置 JSON 字符串
+type | String | 是 | 类型：personal / enterprise / public
+ownerId | String | 否 | 属主 ID，为空时使用当前登录人
+响应 data
+字段 | 类型 | 说明
+id | String | 新建知识库 ID
+curl -s -b cookie.txt -X POST "$BASE_URL/kb" \  -H "Content-Type: application/json" \  -d '{"name":"年金业务部","description":"年金政策与基础知识","type":"enterprise","chunkingConfig":"{\"strategy\":\"hierarchical\"}","parserConfig":"{}"}'
+3.3 知识库详情
+GET /kb/{kb_id}
+响应 data：KbCardVO（字段同 3.1）
+curl -s -b cookie.txt "$BASE_URL/kb/kb_001"
+3.4 更新知识库
+PUT /kb/{kb_id}    Content-Type: application/json
+请求体（KbUpdateRequest，继承 KbBaseRequest）：字段同 3.2 的 name / description / chunkingConfig / parserConfig。更新后 config_version 自动 +1。data 为 null。
+curl -s -b cookie.txt -X PUT "$BASE_URL/kb/kb_001" \  -H "Content-Type: application/json" \  -d '{"name":"年金业务部（新）","description":"更新描述"}'
+3.5 删除知识库
+DELETE /kb/{kb_id}
+逻辑删除，data 为 null。
+curl -s -b cookie.txt -X DELETE "$BASE_URL/kb/kb_001"
+3.6 置顶/取消置顶
+POST /kb/{kb_id}/pin    Content-Type: application/json
+请求体：{"pinned": true}（缺失默认 true）
+字段 | 类型 | 必填 | 说明
+pinned | Boolean | 否 | true 置顶，false 取消
+curl -s -b cookie.txt -X POST "$BASE_URL/kb/kb_001/pin" \  -H "Content-Type: application/json" -d '{"pinned":true}'
+3.7 查询知识分类标签树
+GET /kb/{kb_id}/tags
+响应 data（TagTreeNode[]）
+字段 | 类型 | 说明
+id | String | 标签 ID
+name | String | 标签名称
+parentId | String | 父标签 ID
+owner | String | 标签属主 ID
+kbId | String | 所属知识库 ID，null 表示全局标签
+sort | Integer | 同级排序
+children | TagTreeNode[] | 子节点
+curl -s -b cookie.txt "$BASE_URL/kb/kb_001/tags"
+3.8 查询标签属主集合
+GET /kb/{kb_id}/tag/owners
+响应 data：String[]，知识库关联标签的去重属主 ID 列表（前端菜单权限判断用）。
+3.9 新增知识分类标签
+POST /kb/{kb_id}/tags    Content-Type: application/json
+请求体（TagCreateRequest）
+字段 | 类型 | 必填 | 说明
+name | String | 是 | 标签名称
+owner | String | 否 | 标签属主 ID
+parentId | String | 否 | 父标签 ID，空为根标签
+响应 data：TagTreeNode（同 3.7 节点字段）
+curl -s -b cookie.txt -X POST "$BASE_URL/kb/kb_001/tags" \  -H "Content-Type: application/json" \  -d '{"name":"人社部报告","parentId":"tag_root"}'
+3.10 修改知识分类标签
+PUT /kb/{kb_id}/tags/{tag_id}    Content-Type: application/json
+请求体（TagUpdateRequest）
+字段 | 类型 | 必填 | 说明
+name | String | 是 | 新标签名称
+响应 data：TagTreeNode
+3.11 删除知识分类标签
+DELETE /kb/{kb_id}/tags/{tag_id}
+级联删除下级标签，data 为 null。
+3.12 查询解析引擎列表（代理 Python）
+GET /kb/parser-engines?fileType={type}
+查询参数 | 类型 | 必填 | 说明
+fileType | String | 否 | 按文件类型筛选支持该类型的引擎
+响应 data：Python 侧 /v1/parsers 解开放一壳后的引擎列表与降级链（通常为 {engines:[...], chains:[...]}）。
+curl -s -b cookie.txt "$BASE_URL/kb/parser-engines?fileType=pdf"
+3.13 查询知识库引擎降级链
+GET /kb/{kb_id}/engines
+响应 data（EngineChainVO[]）
+字段 | 类型 | 说明
+type | String | 文件类型（pdf/docx/txt…）
+exts | String[] | 该类型支持的扩展名
+chain | String[] | 引擎降级链，按优先级排列
+desc | String | 引擎链说明
+3.14 保存知识库引擎降级链
+PUT /kb/{kb_id}/engines    Content-Type: application/json
+请求体：EngineChainVO[]（字段同 3.13），data 为 null。
+curl -s -b cookie.txt -X PUT "$BASE_URL/kb/kb_001/engines" \  -H "Content-Type: application/json" \  -d '[{"type":"pdf","exts":["pdf"],"chain":["mineru","vision","pandoc"],"desc":"PDF 解析链"}]'
+4. 文档管理接口
+基路径：/kb/{kb_id}/documents（DocumentController）
+4.1 分页查询文档列表
+GET /kb/{kb_id}/documents?keyword={kw}&tag={tagId}&page={n}&pageSize={n}
+查询参数 | 类型 | 默认 | 说明
+keyword | String | — | 标题模糊搜索
+tag | String | — | 知识分类标签筛选
+page | int | 1 | 页码
+pageSize | int | 20 | 每页条数
+响应 data：PageResult<DocListVO>
+DocListVO
+字段 | 类型 | 说明
+id | String | 文档 ID
+name | String | 文档标题
+desc | String | 摘要/描述
+status | String | 状态徽标：生效中/解析失败/待审核/处理中
+type | String | 文件类型
+tag | String | 知识分类标签
+uploader | String | 上传人 ID
+uploaderName | String | 上传人显示名
+time | LocalDateTime | 上传时间
+review | String | 审核状态文本
+version | String | 版本号文本（如 v1）
+validity | String | 有效期文本
+size | String | 文件大小文本
+slice | String | 切片策略文本
+curl -s -b cookie.txt "$BASE_URL/kb/kb_001/documents?keyword=年金&page=1&pageSize=20"
+4.2 查询待处理文档数量
+GET /kb/{kb_id}/documents/pending-count
+字段 | 类型 | 说明
+pending | boolean | 是否存在待解析/待审核文档
+count | long | 待处理文档数量
+curl -s -b cookie.txt "$BASE_URL/kb/kb_001/documents/pending-count"
+4.3 查询文档详情
+GET /kb/{kb_id}/documents/{doc_id}
+响应 data：DocDetailVO
+字段 | 类型 | 说明
+docId | String | 文档 ID
+title | String | 文档标题
+titleRaw | String | 原始文件名
+fileType | String | 文件类型：pdf/doc/docx/txt/csv/md
+fileSize | String | 文件大小（格式化字符串）
+fileSizeBytes | Long | 文件大小（字节数）
+fileSha256 | String | 文件 SHA-256 指纹
+contentHash | String | 解析文本指纹
+uploader | String | 上传人 ID
+uploaderName | String | 上传人显示名
+parseStatus | String | 解析状态：PENDING/FILE_STORED/PARSING/BLOCKED/SUCCEEDED/FAILED
+indexStatus | String | 索引状态：PENDING/INDEXING/INDEXED/EFFECTIVE/FAILED
+reviewStatus | String | 审核状态：PENDING/REVIEWING/APPROVED/REVIEW_FAILED
+summaryStatus | String | 摘要状态：NONE/SUMMARIZING/SUMMARIZED/FAILED
+questionStatus | String | FAQ 状态：PENDING/GENERATING/SUCCEEDED/FAILED
+parserEngineId | String | 命中解析引擎 ID
+configVersion | Integer | 入库时配置版本快照
+currentVersion | Integer | 当前文档版本号
+expireAt | LocalDateTime | 有效期
+createdAt | LocalDateTime | 创建时间
+updatedAt | LocalDateTime | 更新时间
+description | String | 文档摘要
+tagId | String | 知识分类标签 ID
+tagPath | String | 分类路径，如 年金政策/人社部报告
+sliceRule | String | 分段规则展示文本
+sliceMaxLen | String | 分段最大长度（实际）
+kbName | String | 所属知识库名称
+kbCategory | String | 所属知识库类别
+kbOwner | String | 所属知识库属主
+chunkingConfig | Object | 分片配置对象
+parsedInfo | Object | 解析统计信息对象
+parentSegmentCount | Integer | 父分段数
+childSegmentCount | Integer | 子分段数
+avgSegmentLength | Integer | 平均段长
+curl -s -b cookie.txt "$BASE_URL/kb/kb_001/documents/doc_001"
+4.4 查询文档版本列表
+GET /kb/{kb_id}/documents/{doc_id}/versions
+响应 data：DocVersionVO[]
+字段 | 类型 | 说明
+versionId | String | 版本 ID
+versionNo | Integer | 版本号
+status | String | 版本状态
+changeType | String | 变更类型（FILE_REPLACE/REPARSE/TAG/…）
+title | String | 版本标题
+changeLog | String | 变更说明
+operator | String | 操作人
+contentHash | String | 正文指纹
+createdAt | LocalDateTime | 创建时间
+current | Boolean | 是否当前生效版本
+curl -s -b cookie.txt "$BASE_URL/kb/kb_001/documents/doc_001/versions"
+4.5 查询文档切片列表
+GET /kb/{kb_id}/documents/{doc_id}/nodes?level={child|parent}&restore_placeholder={true|false}
+查询参数 | 类型 | 默认 | 说明
+level | String | child | child 子分段 / parent 父分段
+restore_placeholder | boolean | true | 是否还原表格/代码/公式占位符
+响应 data：分段节点列表（结构由 Python 侧返回，含分段编号、正文、父块关系等）。
+curl -s -b cookie.txt \  "$BASE_URL/kb/kb_001/documents/doc_001/nodes?level=child&restore_placeholder=true"
+4.6 删除文档
+DELETE /kb/{kb_id}/documents/{doc_id}
+逻辑删除，并生成删除审核记录，data 为 null。
+curl -s -b cookie.txt -X DELETE "$BASE_URL/kb/kb_001/documents/doc_001"
+4.7 重新解析/重建索引
+POST /kb/{kb_id}/documents/{doc_id}/rebuild
+仅 OWNER/ADMIN/系统管理员可调用。创建待审核变更，data 为 null。
+curl -s -b cookie.txt -X POST "$BASE_URL/kb/kb_001/documents/doc_001/rebuild"
+4.8 移动文档分类标签
+PUT /kb/{kb_id}/documents/{doc_id}/tag    Content-Type: application/json
+请求体：{"tag_id": "tag_001"}
+字段 | 类型 | 必填 | 说明
+tag_id | String | 是 | 目标知识分类标签 ID（下划线命名）
+curl -s -b cookie.txt -X PUT "$BASE_URL/kb/kb_001/documents/doc_001/tag" \  -H "Content-Type: application/json" -d '{"tag_id":"tag_001"}'
+4.9 编辑文档元数据
+PUT /kb/{kb_id}/documents/{doc_id}/metadata    Content-Type: application/json
+请求体（UpdateDocMetadataRequest）
+字段 | 类型 | 必填 | 说明
+tagId | String | 否 | 知识分类标签 ID
+expireAt | String | 否 | 有效期截止日期（yyyy-MM-dd）
+engine | String | 否 | 解析引擎偏好，空为自动选择
+chunkSwitch | Boolean | 否 | 是否启用切片
+chunkStrategy | String | 否 | 切片策略
+parentSize | Integer | 否 | 父块大小（字符）
+childSize | Integer | 否 | 子块大小（字符）
+overlap | Integer | 否 | 切片重叠（字符）
+chunkParams | Map | 否 | 策略专属参数
+元数据变更生成待审核记录，data 为 null。
+curl -s -b cookie.txt -X PUT "$BASE_URL/kb/kb_001/documents/doc_001/metadata" \  -H "Content-Type: application/json" \  -d '{"tagId":"tag_001","expireAt":"2027-12-31","engine":"mineru"}'
+4.10 获取原始文件下载链接
+GET /kb/{kb_id}/documents/{doc_id}/raw
+响应 data：{"url": "https://..."}
+curl -s -b cookie.txt "$BASE_URL/kb/kb_001/documents/doc_001/raw"
+4.11 获取原始文件预览链接
+GET /kb/{kb_id}/documents/{doc_id}/raw/preview
+响应 data：{"url": "https://..."}
+4.12 查询被阻断文档列表
+GET /kb/{kb_id}/documents/blocked
+响应 data：被阻断（BLOCKED）文档列表。
+curl -s -b cookie.txt "$BASE_URL/kb/kb_001/documents/blocked"
+4.13 解除文档阻断
+POST /kb/{kb_id}/documents/{doc_id}/unblock
+4.14 查询文档处理溯源
+GET /kb/{kb_id}/documents/{doc_id}/trace
+响应 data：处理溯源信息（解析引擎、配置快照、各阶段耗时等）。
+curl -s -b cookie.txt "$BASE_URL/kb/kb_001/documents/doc_001/trace"
+5. 上传接口
+基路径：/kb/{kb_id}/documents（UploadController）
+5.1 批量上传文档
+POST /kb/{kb_id}/documents/upload    Content-Type: multipart/form-data
+表单参数
+参数 | 类型 | 必填 | 说明
+files | MultipartFile[] | 是 | 上传文件，单次最多 20 个，单个最大 50MB
+fileType | String | 否 | 内容类型：text/table/image/ppt
+chunkStrategy | String | 否 | 分片策略：sentence/semantic/sentence_window/hierarchical/structured，默认 hierarchical
+parentSize | Integer | 否 | 父分段大小（256~8192，默认 4096）
+childSize | Integer | 否 | 子分段大小（128~4096，默认 384）
+overlap | Integer | 否 | 分片重叠（0~childSize-1，默认 50）
+chunkParams | String | 否 | 策略专属参数 JSON 字符串
+category | String | 否 | 知识分类路径
+tagId | String | 否 | 知识分类标签 ID
+engine | String | 否 | 首选解析引擎（空为自动选择）
+validity | String | 否 | 有效期截止日期
+chunkSwitch | Boolean | 否 | 是否启用切片，默认启用
+响应 data
+字段 | 类型 | 说明
+document_ids | String[] | 新建文档 ID 列表（下划线字段）
+curl -s -b cookie.txt -X POST "$BASE_URL/kb/kb_001/documents/upload" \  -F "files=@年金政策.pdf" -F "files=@说明.docx" \  -F "fileType=text" -F "chunkStrategy=hierarchical" \  -F "childSize=384" -F "overlap=50" -F "tagId=tag_001" \  -F "engine=mineru" -F "validity=2027-12-31"
+5.2 替换文档原始文件
+POST /kb/{kb_id}/documents/{doc_id}/replace    Content-Type: multipart/form-data
+表单参数：file（必填）+ UploadFormRequest 字段（同 5.1，不含 files）。
+创建待审核的替换版本并触发解析，data 为 null。
+curl -s -b cookie.txt -X POST "$BASE_URL/kb/kb_001/documents/doc_001/replace" \  -F "file=@年金政策_v2.pdf" -F "chunkStrategy=hierarchical"
+5.3 上传前查重
+POST /kb/{kb_id}/documents/check-duplicates    Content-Type: application/json
+请求体（DuplicateCheckRequest）
+字段 | 类型 | 必填 | 说明
+sha256List | String[] | 是 | 待检查文件的 SHA-256 指纹列表
+响应 data（DuplicateCheckResponse）
+字段 | 类型 | 说明
+duplicates | DuplicateItem[] | 命中的重复文档
+uniqueSha256 | String[] | 未命中的指纹
+DuplicateItem
+字段 | 类型 | 说明
+sha256 | String | 文件指纹
+documentId | String | 已存在文档 ID
+title | String | 已存在文档标题
+curl -s -b cookie.txt -X POST "$BASE_URL/kb/kb_001/documents/check-duplicates" \  -H "Content-Type: application/json" \  -d '{"sha256List":["e3b0c442..."]}'
+{  "code":0,"message":"OK",  "data":{    "duplicates":[{"sha256":"e3b0c442...","documentId":"doc_001","title":"年金政策"}],    "uniqueSha256":[]  }}
+6. 审核接口
+基路径：/v1/reviews（ReviewController）
+6.1 全局审核列表
+GET /v1/reviews?status={s}&changeType={t}&keyword={kw}&page={n}&size={n}
+查询参数 | 类型 | 默认 | 说明
+status | String | — | 审核状态：待审核/审核通过/驳回（或对应枚举值）
+changeType | String | — | 变更类型筛选
+keyword | String | — | 文档标题关键字
+page | int | 1 | 页码
+size | int | 20 | 每页条数
+响应 data：PageResult<ReviewListVO>
+ReviewListVO
+字段 | 类型 | 说明
+reviewId | String | 审核项 ID
+taskId | String | 任务 ID
+documentId | String | 文档 ID
+documentTitle | String | 文档标题
+fileType | String | 文件类型
+fromVersion | Integer | 变更前版本号
+toVersion | Integer | 变更后版本号
+changeType | String | 变更类型
+summary | String | 变更摘要
+changeItems | ChangeItemVO[] | 变更明细
+diffStat | DiffStat | Diff 统计
+status | String | 审核状态
+submitter | String | 提交人 ID
+submitterName | String | 提交人显示名
+createdAt | LocalDateTime | 创建时间
+canAudit | Boolean | 当前用户是否可审核
+ChangeItemVO
+字段 | 类型 | 说明
+id | String | 明细 ID
+kind | String | 变更类别
+fieldName | String | 字段名
+oldValue | String | 旧值
+newValue | String | 新值
+affectsParse | Boolean | 是否影响解析
+note | String | 备注
+operator | String | 操作人
+createdAt | LocalDateTime | 创建时间
+DiffStat
+字段 | 类型 | 说明
+added | int | 新增行数
+removed | int | 删除行数
+changed | int | 修改行数
+curl -s -b cookie.txt "$BASE_URL/v1/reviews?status=待审核&page=1&size=20"
+6.2 审核项详情
+GET /v1/reviews/{reviewId}
+响应 data：ReviewDetailVO
+字段 | 类型 | 说明
+reviewId | String | 审核项 ID
+taskId | String | 任务 ID
+kbId | String | 知识库 ID
+documentId | String | 文档 ID
+documentTitle | String | 文档标题
+fileType | String | 文件类型
+fromVersionId | String | 变更前版本 ID
+toVersionId | String | 变更后版本 ID
+fromVersion | Integer | 变更前版本号
+toVersion | Integer | 变更后版本号
+changeType | String | 变更类型
+changeSummary | String | 变更摘要
+changeItems | ChangeItemVO[] | 变更明细
+diffStat | DiffStat | Diff 统计
+status | String | 审核状态
+submitter | String | 提交人 ID
+submitterName | String | 提交人显示名
+reviewer | String | 审核人 ID
+reviewerName | String | 审核人显示名
+reviewOpinion | String | 审核意见
+6.3 修改历史时间线
+GET /v1/reviews/{reviewId}/history
+响应 data：OperateLogVO[]
+字段 | 类型 | 说明
+id | String | 日志 ID
+kbId | String | 知识库 ID
+documentId | String | 文档 ID
+actionCode | String | 操作编码
+operator | String | 操作人 ID
+operatorName | String | 操作人显示名
+fromStatus | String | 原状态
+toStatus | String | 新状态
+opinion | String | 意见
+remark | String | 备注
+taskId | String | 任务 ID
+reviewId | String | 审核项 ID
+versionId | String | 版本 ID
+changeType | String | 变更类型
+changeDetail | String | 变更详情
+createdAt | LocalDateTime | 发生时间
+curl -s -b cookie.txt "$BASE_URL/v1/reviews/rv_001/history"
+6.4 正文 Diff
+GET /v1/reviews/{reviewId}/diff?mode={unified|split}&ignoreWhitespace={bool}&cursor={c}&limit={n}
+查询参数 | 类型 | 默认 | 说明
+mode | String | unified | Diff 展示模式
+ignoreWhitespace | boolean | false | 是否忽略空白
+cursor | String | — | 分页游标
+limit | int | 50 | 每页 hunk 数
+响应 data：DiffResultVO
+字段 | 类型 | 说明
+from | VersionRef | 变更前版本引用
+to | VersionRef | 变更后版本引用
+stat | DiffStat | Diff 统计
+hunks | Hunk[] | Diff 分块
+nextCursor | String | 下一页游标，null 表示结束
+message | String | 提示信息（如首次上传返回"首次上传，全文新增"，此时无 hunks）
+VersionRef：versionId(String)、versionNo(int)、sha256(String)
+Hunk：oldStart(int)、oldLines(int)、newStart(int)、newLines(int)、lines(DiffLine[])
+DiffLine：type(String，如 add/del/ctx)、text(String)
+curl -s -b cookie.txt "$BASE_URL/v1/reviews/rv_001/diff?mode=unified&ignoreWhitespace=false&limit=50"
+6.5 审核项版本正文
+GET /v1/reviews/{reviewId}/content?side={from|to}
+查询参数 | 类型 | 默认 | 说明
+side | String | to | to 新版本正文 / from 旧版本正文
+响应 data：ReviewContentVO
+字段 | 类型 | 说明
+side | String | 版本侧
+versionId | String | 版本 ID
+versionNo | Integer | 版本号
+title | String | 标题
+contentMd | String | Markdown 正文
+contentSha256 | String | 正文指纹
+message | String | 提示信息
+curl -s -b cookie.txt "$BASE_URL/v1/reviews/rv_001/content?side=to"
+6.6 审核项版本信息列表
+GET /v1/reviews/{reviewId}/versions
+响应 data：VersionInfoVO[]
+字段 | 类型 | 说明
+versionId | String | 版本 ID
+versionNo | Integer | 版本号
+title | String | 标题
+fileSize | Long | 文件大小（字节）
+fileSha256 | String | 文件指纹
+contentSha256 | String | 正文指纹
+storagePath | String | 存储路径
+changeLog | String | 变更说明
+operator | String | 操作人 ID
+operatorName | String | 操作人显示名
+status | String | 版本状态
+changeType | String | 变更类型
+parseStatus | String | 解析状态
+createdAt | LocalDateTime | 创建时间
+parserEngineId | String | 解析引擎 ID
+parserEngineVersion | String | 引擎版本
+parseCostMs | Integer | 解析耗时（毫秒）
+indexStatus | String | 索引状态
+reviewStatus | String | 审核状态
+vectorsVersion | String | 向量版本
+configVersion | Integer | 配置版本快照
+curl -s -b cookie.txt "$BASE_URL/v1/reviews/rv_001/versions"
+6.7 审核通过
+POST /v1/reviews/{reviewId}/approve    Content-Type: application/json（body 可省略）
+请求体（ReviewActionRequest，可空）
+字段 | 类型 | 必填 | 说明
+opinion | String | 否 | 审核意见
+operator | String | 否 | 操作人，缺省取当前登录人
+curl -s -b cookie.txt -X POST "$BASE_URL/v1/reviews/rv_001/approve" \  -H "Content-Type: application/json" -d '{"opinion":"同意"}'
+6.8 审核驳回
+POST /v1/reviews/{reviewId}/reject    Content-Type: application/json（body 可省略）
+请求体同 6.7。
+curl -s -b cookie.txt -X POST "$BASE_URL/v1/reviews/rv_001/reject" \  -H "Content-Type: application/json" -d '{"opinion":"正文与原件不符"}'
+6.9 批量审核通过
+POST /v1/reviews/batch-approve    Content-Type: application/json
+请求体（BatchReviewRequest）
+字段 | 类型 | 必填 | 说明
+reviewIds | String[] | 是 | 审核项 ID 列表
+opinion | String | 否 | 审核意见
+operator | String | 否 | 操作人，缺省取当前登录人
+响应 data（BatchReviewResult）
+字段 | 类型 | 说明
+successCount | int | 成功数
+failedCount | int | 失败数
+failures | FailedItem[] | 失败明细
+FailedItem：reviewId(String)、reason(String)
+curl -s -b cookie.txt -X POST "$BASE_URL/v1/reviews/batch-approve" \  -H "Content-Type: application/json" \  -d '{"reviewIds":["rv_001","rv_002"],"opinion":"批量同意"}'
+6.10 批量审核驳回
+POST /v1/reviews/batch-reject    Content-Type: application/json
+请求体/响应同 6.9。
+7. 任务接口
+基路径：/v1/tasks（TaskController）
+7.1 分页查询任务列表
+GET /v1/tasks?kbId={kbId}&limit={n}&offset={n}
+查询参数 | 类型 | 默认 | 说明
+kbId | String | — | 知识库 ID（可选）
+limit | int | 20 | 每页条数
+offset | int | 0 | 偏移量
+响应 data：PageResult<IngestionTask>
+IngestionTask
+字段 | 类型 | 说明
+id | String | 任务 ID
+kbId | String | 知识库 ID
+documentId | String | 文档 ID（批量任务可为空）
+taskType | String | 类型：PARSE/INDEX/REINDEX/QA_GEN/SUMMARY/CLEANUP
+status | String | 状态：PENDING/RUNNING/SUCCEEDED/FAILED
+totalNum | Long | 总处理数
+successNum | Long | 成功数
+failedNum | Long | 失败数
+errorMessage | String | 最后错误信息
+logs | String | 执行日志（JSON 字符串）
+configVersion | Integer | 配置版本快照
+retriedTimes | Integer | 已重试次数
+triggeredBy | String | 触发人/系统
+startedAt | LocalDateTime | 开始时间
+finishedAt | LocalDateTime | 结束时间
+createdAt | LocalDateTime | 创建时间
+curl -s -b cookie.txt "$BASE_URL/v1/tasks?kbId=kb_001&limit=20&offset=0"
+7.2 任务详情
+GET /v1/tasks/{taskId}
+响应 data：TaskDetailVO
+字段 | 类型 | 说明
+task | IngestionTask | 任务实体（字段同 7.1）
+reviewSummary | ReviewSummary | 审核汇总
+ReviewSummary：pending(long)、approved(long)、rejected(long)
+curl -s -b cookie.txt "$BASE_URL/v1/tasks/task_001"
+7.3 任务下的审核列表
+GET /v1/tasks/{taskId}/reviews?status={s}&changeType={t}&keyword={kw}&page={n}&size={n}
+参数与响应同 6.1（PageResult<ReviewListVO>）。
+curl -s -b cookie.txt "$BASE_URL/v1/tasks/task_001/reviews?page=1&size=20"
+7.4 派发任务
+POST /v1/tasks/dispatch?taskType={type}&kbId={kbId}&docId={docId}
+查询参数 | 类型 | 必填 | 说明
+taskType | String | 是 | 任务类型（PARSE/REINDEX/SUMMARY/FAQ 等）
+kbId | String | 否 | 知识库 ID
+docId | String | 否 | 文档 ID
+data 为 null。
+curl -s -b cookie.txt -X POST "$BASE_URL/v1/tasks/dispatch?taskType=REINDEX&kbId=kb_001&docId=doc_001"
+8. 检索接口
+基路径：/query（QueryController）
+8.1 执行 RAG 检索
+POST /query    Content-Type: application/json
+请求体（QueryRequest）
+字段 | 类型 | 默认 | 说明
+query | String | — | 查询问题文本
+topK | Integer | 5 | 返回结果数量
+threshold | Double | 0.5 | 相关度阈值
+sort | String | rank | 排序方式：rank / score
+scope | QueryScope | — | 检索范围限定
+QueryScope
+字段 | 类型 | 说明
+kbIds | String[] | 限定的知识库 ID 列表
+tagIds | String[] | 限定的标签 ID 列表（含子树）
+docIds | String[] | 限定的文档 ID 列表
+wikiIds | String[] | 限定的 Wiki ID 列表
+响应 data：QueryResult
+字段 | 类型 | 说明
+total | int | 召回总数
+highRelevance | int | 高相关度数量（score ≥ threshold），兼容 high_relevance
+costMs | long | 检索耗时（毫秒），兼容 cost_ms
+items | RecallItem[] | 召回结果列表
+answer | String | LLM 生成的回答文本
+references | ReferenceItem[] | 回答引用来源
+RecallItem
+字段 | 类型 | 说明
+rank | Integer | 排名
+score | Double | 相关度分数（0~1）
+kb | String | 所属知识库名称
+doc | String | 所属文档名称
+ver | String | 文档版本
+cpath | String | 分类路径
+chunk | String | 分段编号
+match | String | 命中片段（高亮）
+full | String | 完整分段内容
+ReferenceItem
+字段 | 类型 | 说明
+refIndex | Integer | 采纳顺序，兼容 ref_index
+parentId | String | 父块 ID，兼容 parent_id
+docId | String | 文档 ID，兼容 doc_id
+docName | String | 文档名称，兼容 doc_name
+kb | String | 知识库名称
+titlePath | String | 章节路径，兼容 title_path
+snippet | String | 片段摘要
+score | Double | 相关度分数
+curl -s -b cookie.txt -X POST "$BASE_URL/query" \  -H "Content-Type: application/json" \  -d '{"query":"年金缴费比例如何规定？","topK":5,"threshold":0.5,"sort":"rank","scope":{"kbIds":["kb_001"],"tagIds":["tag_001"]}}'
+{  "code":0,"message":"OK",  "data":{    "total":1,"highRelevance":1,"costMs":320,    "items":[{      "rank":1,"score":0.92,"kb":"年金业务部","doc":"年金政策",      "ver":"v2","cpath":"年金政策/人社部报告","chunk":"c-003",      "match":"缴费比例...","full":"..."    }],    "answer":"根据《年金政策》......",    "references":[{"refIndex":1,"docId":"doc_001","docName":"年金政策","titlePath":"年金政策/人社部报告","snippet":"缴费比例...","score":0.92}]  }}
+8.2 检索范围树
+GET /query/trees
+响应 data：TagTreeNode[]（字段同 3.7），结构为"知识库 → 标签 → 子标签"。
+curl -s -b cookie.txt "$BASE_URL/query/trees"
+8.3 加入引用上下文
+POST /query/quote    Content-Type: application/json
+请求体（QuoteRequest）
+字段 | 类型 | 必填 | 说明
+docId | String | 是 | 文档 ID
+chunk | String | 是 | 分段编号
+content | String | 是 | 分段内容
+data 为 null。
+curl -s -b cookie.txt -X POST "$BASE_URL/query/quote" \  -H "Content-Type: application/json" \  -d '{"docId":"doc_001","chunk":"c-003","content":"缴费比例..."}'
+8.4 按文档 ID 获取原始文件
+GET /query/documents/{doc_id}/raw
+响应 data：{"url": "https://..."}
+curl -s -b cookie.txt "$BASE_URL/query/documents/doc_001/raw"
+9. Wiki 接口
+基路径：/wiki（WikiController）
+9.1 分页查询主题列表
+GET /wiki/topics?keyword={kw}&page={n}&pageSize={n}
+查询参数 | 类型 | 默认 | 说明
+keyword | String | — | 标题模糊搜索
+page | int | 1 | 页码
+pageSize | int | 20 | 每页条数
+响应 data：PageResult<WikiCardVO>
+WikiCardVO（继承 CardBaseVO：id/type/title/desc/owner/ownerName/pinned/lastUpdate/count）
+字段 | 类型 | 说明
+entries | Integer | 条目数量
+views | Integer | 浏览量
+likes | Integer | 点赞数
+subTopics | String[] | 子主题数组
+creator | String | 创建者 ID
+creatorName | String | 创建者显示名
+status | String | 状态：DRAFT / PUBLISHED
+curl -s -b cookie.txt "$BASE_URL/wiki/topics?keyword=年金&page=1&pageSize=20"
+9.2 创建主题
+POST /wiki/topics    Content-Type: application/json
+请求体（WikiTopicCreateRequest）
+字段 | 类型 | 必填 | 说明
+type | String | 否 | 主题类型
+title | String | 是 | 主题标题
+description | String | 否 | 主题描述
+响应 data：{"id": "topic_001"}
+curl -s -b cookie.txt -X POST "$BASE_URL/wiki/topics" \  -H "Content-Type: application/json" \  -d '{"type":"topic","title":"年金规则","description":"年金业务规则主题"}'
+9.3 主题详情
+GET /wiki/topics/{topic_id}
+响应 data：WikiCardVO（字段同 9.1）
+9.4 主题实体目录树
+GET /wiki/topics/{topic_id}/entities
+响应 data：TopicEntityTree[]
+字段 | 类型 | 说明
+name | String | 节点名称（实体名）
+isFile | Boolean | 是否叶子文件节点
+icon | String | 图标标识
+children | TopicEntityTree[] | 子节点
+curl -s -b cookie.txt "$BASE_URL/wiki/topics/topic_001/entities"
+9.5 实体详情
+GET /wiki/topics/{topic_id}/entities/{entity_id}
+响应 data：TopicEntityVO
+字段 | 类型 | 说明
+title | String | 实体名称
+theme | String | 所属主题
+tag | String | 实体类型标签（如 rule）
+def | String | 定义文本
+note | String | 跨文档聚合来源说明（HTML）
+roles | RoleItem[] | 业务角色列表
+sections | SectionItem[] | 章节段落列表
+caveats | String[] | 数据口径与限制
+links | LinkItem[] | 关联连接列表
+RoleItem：role(String)、desc(String)
+SectionItem：h(String 段落标题)、tables(TableItem[])
+TableItem：title(String)、head(String[])、rows(String[][])
+LinkItem：target(String 目标实体)、relation(String 关系描述)
+curl -s -b cookie.txt "$BASE_URL/wiki/topics/topic_001/entities/ent_001"
+9.6 实体抽取规则
+GET /wiki/topics/{topic_id}/rules
+响应 data：{"rules": "<Markdown 规则文本>"}
+9.7 保存实体
+PUT /wiki/entities/{entity_id}    Content-Type: application/json
+请求体（WikiEntitySaveRequest）
+字段 | 类型 | 必填 | 说明
+title | String | 否 | 实体名称
+def | String | 否 | 定义文本
+note | String | 否 | 跨文档聚合来源说明
+roles | String | 否 | 业务角色（JSON 字符串）
+sections | String | 否 | 章节段落（JSON 字符串）
+caveats | String | 否 | 数据口径与限制（JSON 字符串）
+links | String | 否 | 关联连接（JSON 字符串）
+contentMd | String | 否 | 编辑内容（Markdown/富文本）
+保存后版本号 +1，data 为 null。
+curl -s -b cookie.txt -X PUT "$BASE_URL/wiki/entities/ent_001" \  -H "Content-Type: application/json" \  -d '{"title":"缴费比例","def":"...","contentMd":"# 缴费比例\n..."}'
+9.8 发布实体
+POST /wiki/entities/{entity_id}/publish
+状态由 DRAFT 变为 PUBLISHED，data 为 null。
+curl -s -b cookie.txt -X POST "$BASE_URL/wiki/entities/ent_001/publish"
+9.9 实体版本历史
+GET /wiki/entities/{entity_id}/history
+响应 data：历史版本列表。
+curl -s -b cookie.txt "$BASE_URL/wiki/entities/ent_001/history"
+9.10 实体关联源文档
+GET /wiki/entities/{entity_id}/source-docs
+响应 data：源文档列表。
+9.11 实体图谱关联连接
+GET /wiki/entities/{entity_id}/links
+响应 data：图谱连接列表。
+10. 健康检查与解析器
+基路径：/v1（HealthController）
+10.1 健康检查
+GET /v1/health
+无需登录。响应 data：{"status": "<Python 侧健康状态>"}
+curl -s "$BASE_URL/v1/health"
+10.2 查询解析引擎
+GET /v1/parsers?kbId={kbId}&fileType={type}
+查询参数 | 类型 | 必填 | 说明
+kbId | String | 否 | 知识库 ID，用于获取库级引擎配置
+fileType | String | 否 | 按文件类型筛选
+响应 data：解析引擎列表（ParserUtils.unwrapEngines 对 Python 响应解包后的 {engines, chains}）。
+curl -s -b cookie.txt "$BASE_URL/v1/parsers?kbId=kb_001&fileType=pdf"
+11. OpenAPI 接口
+基路径：/openapi/v1（OpenApiController）
+11.1 签名认证
+/openapi/** 不经 JWT 拦截器，由 OpenApiAuthFilter 做 HMAC-SHA256 签名校验。
+请求头
+Header | 说明
+X-App-Id | 集成应用 ID（对应 llm_integration_app.app_id）
+X-Timestamp | Unix 时间戳（秒），服务端校验时效窗口
+X-Nonce | 随机串，防重放
+X-Signature | 签名（Hex 小写）
+X-Request-Id | 请求追踪 ID（可选）
+待签名串（canonical string），各段以 \n 连接：
+METHOD\nPATH\nCANONICAL_QUERY\nX-Timestamp\nX-Nonce\nSHA256(body)
+PATH：不含 query 的请求路径（如 /openapi/v1/kb）。CANONICAL_QUERY：query 参数按 key 升序，k=v 以 & 连接；无 query 时为空串。SHA256(body)：请求体 SHA-256 的十六进制小写；无 body 时为空的 SHA-256。X-Signature = HMAC-SHA256(secret, canonicalString) 十六进制小写。
+签名示例（bash + openssl）
+APP_ID=app_demoSECRET=******TS=$(date +%s)NONCE=$(openssl rand -hex 8)METHOD=GETPATH_=/openapi/v1/kbQUERY=""BODY_HASH=$(printf "" | openssl dgst -sha256 -hex | awk '{print $2}')CANONICAL=$(printf '%s\n%s\n%s\n%s\n%s\n%s' "$METHOD" "$PATH_" "$QUERY" "$TS" "$NONCE" "$BODY_HASH")SIG=$(printf '%s' "$CANONICAL" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')
+curl -s "https://{gateway}/knowledge$PATH_" \  -H "X-App-Id: $APP_ID" -H "X-Timestamp: $TS" \  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG"
+11.2 查询可见知识库
+GET /openapi/v1/kb
+scope：kb.read。响应 data：Map[]，每项字段：id、name、category、ownerId、description。
+curl -s "$BASE_URL/openapi/v1/kb" -H "X-App-Id: ..." -H "X-Timestamp: ..." -H "X-Nonce: ..." -H "X-Signature: ..."
+11.3 分页查询知识库文档
+GET /openapi/v1/kb/{kbId}/documents?page={n}&pageSize={n}
+scope：doc.read。知识库不存在返回 1004。
+响应 data：PageResult<Map>，每项字段：id、kbId、tagId、title、fileType、fileSize、parseStatus、reviewStatus、indexStatus、createdAt。
+curl -s "$BASE_URL/openapi/v1/kb/kb_001/documents?page=1&pageSize=20" \  -H "X-App-Id: ..." -H "X-Timestamp: ..." -H "X-Nonce: ..." -H "X-Signature: ..."
+11.4 执行检索
+POST /openapi/v1/query    Content-Type: application/json
+scope：query.run。请求体/响应同 8.1 QueryRequest / QueryResult。
+curl -s -X POST "$BASE_URL/openapi/v1/query" \  -H "X-App-Id: ..." -H "X-Timestamp: ..." -H "X-Nonce: ..." -H "X-Signature: ..." \  -H "Content-Type: application/json" \  -d '{"query":"年金缴费比例","topK":5}'
+11.5 查询任务详情
+GET /openapi/v1/tasks/{taskId}
+scope：task.read。响应同 7.2 TaskDetailVO。
+curl -s "$BASE_URL/openapi/v1/tasks/task_001" \  -H "X-App-Id: ..." -H "X-Timestamp: ..." -H "X-Nonce: ..." -H "X-Signature: ..."
+11.6 派发任务
+POST /openapi/v1/tasks/dispatch    Content-Type: application/json
+scope：task.dispatch。
+请求体
+字段 | 类型 | 必填 | 说明
+taskType | String | 是 | 任务类型
+kbId | String | 是 | 知识库 ID（为空返回 1000）
+docId | String | 否 | 文档 ID
+响应 data：{"kbId": "kb_001", "accepted": true}
+curl -s -X POST "$BASE_URL/openapi/v1/tasks/dispatch" \  -H "X-App-Id: ..." -H "X-Timestamp: ..." -H "X-Nonce: ..." -H "X-Signature: ..." \  -H "Content-Type: application/json" \  -d '{"taskType":"REINDEX","kbId":"kb_001","docId":"doc_001"}'
+12. 权限模型说明
+12.1 知识库角色
+KbRole 层级（高 → 低）：ADMIN > OWNER > EDITOR > VIEWER > NONE。
+操作 | 最低角色
+查看知识库/文档/检索 | VIEWER
+上传文档、提交审核、替换文件 | EDITOR（替换用 DOC_UPDATE）
+审核通过/驳回、重新解析、编辑元数据、删除、置顶、标签管理 | OWNER / ADMIN / 系统管理员
+文档权限通过 llm_document.tag_id → llm_kb_tag.owner_id 关联到标签属主。审核接口返回的 canAudit 表示当前用户对该审核项是否具备审核权限，前端应据此禁用"通过/驳回"按钮。OpenAPI 通过 llm_integration_app 的 scope 控制访问，与登录用户权限相互独立。
+12.2 常见错误响应
+{"code": 1001, "message": "未登录或登录已过期", "data": null, "success": false}
+{"code": 1006, "message": "无权限访问该资源", "data": null, "success": false}
