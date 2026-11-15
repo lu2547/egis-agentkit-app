@@ -11,6 +11,7 @@ from egis_agentkit.service.resource._catalog import ResourceService
 from egis_agentkit.storage import AgentKitStorage
 from egis_agentkit.storage._schema import cleanup_schema
 from egis_agentkit.storage.project._files import ProjectFileStorage
+from egis_agentkit.storage.skill._archive import SkillArchiveStorage
 
 from ._demo import seed_demo
 
@@ -35,7 +36,18 @@ async def provision(command, *, database=None, apply=False):
                     operation = upgrade_schema
                 else:
                     operation = cleanup_schema
-                result = await operation(engine, database=database, apply=apply)
+                options = {}
+                if command == "upgrade-db":
+                    options = {"skill_archive_limits": settings.skill.archive}
+                    if settings.skill.storage.root is not None:
+                        options["skill_archives"] = SkillArchiveStorage.from_settings(
+                            settings.skill
+                        )
+                    elif apply:
+                        raise ValueError("技能归档迁移必须先配置 NAS 挂载目录")
+                result = await operation(
+                    engine, database=database, apply=apply, **options
+                )
                 print(f"目标数据库 {result.database}，schema {result.schema}")
                 for name, state in result.tables.items():
                     print(f"{name:<28} {state}")
