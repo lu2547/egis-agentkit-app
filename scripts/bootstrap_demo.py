@@ -45,7 +45,7 @@ async def main():
         if key not in existing and value:
             set_key(str(env_path), key, str(value))
     load_dotenv(env_path)
-    from egis_agentkit.backend.nacos import (
+    from egis_agentkit.client.nacos import (
         AGENTKIT_DATA_ID,
         CONFIG_NOT_FOUND_CODE,
         NacosClient,
@@ -60,7 +60,7 @@ async def main():
     document = yaml.safe_load(example.read_text())
     settings = document["agentkit"]
     settings["workspace"]["runtime"]["root"] = str(APP / "var/workspace")
-    settings["backend"]["kafka"]["connection"]["deploymentMode"] = "cluster"
+    settings["client"]["kafka"]["connection"]["deploymentMode"] = "cluster"
     settings["user"]["identity"].update(
         mode="demo", issuer="egis-agentkit-demo", algorithm="HS256", jwksUrl=None
     )

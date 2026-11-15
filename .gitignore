@@ -16,6 +16,5 @@ dist/
 .worktrees/
 .vscode/
 
-# Local live-environment verification records and review transcripts.
-/docs/真实*验收.json
-/docs/reviews/domain-review.txt
+# Local documentation is maintained outside version control.
+/docs/

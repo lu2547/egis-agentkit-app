@@ -10,7 +10,7 @@ import httpx
 from agentscope.event import UserConfirmResultEvent
 from dotenv import load_dotenv
 
-from egis_agentkit_app.provision import identifier
+from egis_agentkit_app.bootstrap._demo import identifier
 
 APP = Path(__file__).resolve().parents[1]
 
@@ -18,8 +18,15 @@ APP = Path(__file__).resolve().parents[1]
 async def run_reply(client, task, prompt, *, allow_write=None, interrupt=False):
     sid, aid = task["session_id"], task["agent_id"]
     events, reasons, confirmations = [], [], 0
+    # 从本轮开始前的检查点订阅，不能把上一轮重放的 REPLY_END 当成本轮完成。
+    history = await client.get(f"/sessions/{sid}/messages", params={"agent_id": aid})
+    history.raise_for_status()
+    params = {"agent_id": aid}
+    cursor = history.json().get("event_cursor")
+    if cursor:
+        params["after"] = cursor
     async with client.stream(
-        "GET", f"/sessions/{sid}/stream", params={"agent_id": aid}
+        "GET", f"/sessions/{sid}/stream", params=params
     ) as stream:
         stream.raise_for_status()
         trigger = await client.post(
@@ -162,7 +169,7 @@ async def main(check_hitl, check_stop):
         )
         assistant = (await client.get("/manager/assistant")).json()
         if check_hitl:
-            from egis_agentkit.backend.nacos import NacosClient, NacosConfigProvider
+            from egis_agentkit.client.nacos import NacosClient, NacosConfigProvider
 
             from egis_agentkit_app.bootstrap import nacos_bootstrap
 
