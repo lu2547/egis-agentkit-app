@@ -28,6 +28,6 @@ python -m egis_agentkit_app serve
 
 专家可以使用平台工具、Skill 和 MCP。第三方专家由 HTTP 或 WebSocket 接入，会话运行时按权限加载定义和绑定资源。
 
-默认提供方为 OpenSandbox 的 Docker 运行时；Manager 与 Core 实现原生通用接口，SDK 通信通过 Client 接入。用户工作区身份固定，各项目会话保留独立 cwd 和隔离执行绑定。文件、变更和预览管理归 Project。ReMe 为默认关闭的可选能力。
+沙箱配置使用 `workspace.runtime.mode: pks` 和 `workspace.runtime.sandbox`。Manager 与 Core 实现原生通用接口；当前开发适配器通过 OpenSandbox SDK 通信，公司 PKS 需注入实际沙箱 Client，配置命名不代表公司通信实现已接通。用户工作区身份固定，各项目会话保留独立 cwd 和隔离执行绑定。文件、变更和预览管理归 Project。ReMe 为默认关闭的可选能力。
 
 验收命令、结果与边界见 [实施记录](docs/实施记录.md)。Kafka 沿用原生 drain/spawn ACK 边界，不承诺运行完成后才 ACK，也不承诺业务 exactly-once；详情见 [MessageBus 验收](../egis-agentkit-framework/docs/MessageBus验收.md)。
