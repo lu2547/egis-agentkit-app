@@ -1,6 +1,6 @@
 # AgentKit 知识库接入
 
-本说明以三个 Git worktree 的父目录 `egis-agentkit-knowledge/` 为根；入口 `README.md` 指向本文件。这里包含 `framework/`、`app/`、`frontend/`，分支均为 `feat/knowledge-base-integration`。原来的三个工作目录和运行中的服务没有被替换。
+本说明以三个 Git worktree 的父目录 `egis-agentkit-knowledge/` 为根；入口 `README.md` 指向本文件。这里包含 `framework/`、`app/`、`frontend/`，知识库分支统一为 `knowledgebase-test1.0.0-dev`。稳定代码已合入各仓库 `main`，并建立 `1.0.0` 分支；知识库继续独立开发。运行服务和工作目录保持原有隔离方式。
 
 ## 看效果
 
@@ -149,7 +149,7 @@ AGENTKIT_PYTHON=/absolute/path/to/python node scripts/verify-knowledge.mjs --bas
 
 本次自主决定及边界：
 
-1. 桌面 worktree 创建调用未返回且未产生工作树，检查后改用 Git worktree 建立三个独立分支目录；目录已完整保留，未合并、未推送。
+1. 桌面 worktree 创建调用未返回且未产生工作树，检查后改用 Git worktree 建立三个独立分支目录；目录已完整保留。知识库现已按要求改名并推送为 `knowledgebase-test1.0.0-dev`，未合入稳定分支。
 2. 在没有真实 Java 地址/密钥时实现生产客户端，并显式运行测试契约服务验收 UI/工具链；代价是现网 Java/LlamaIndex、真实授权、网关 Cookie/CORS 与文件服务器 MIME/CSP 仍须部署联调验证。
 3. HMAC 应用范围与平台个人/组授权取交集，当前不自动同步 PMS 文档权限；代价是部署方必须先正确配置应用和平台库级范围，不能将需要不同文档权限的库混作全员授权库。
 4. 来源复用原生 ToolResult，不增加来源表；原文采用文档明确提供的 Cookie 入口，展示当前文件而非历史版本文件；代价是无法通过本版接口固定打开检索时的旧原件。
