@@ -12,6 +12,7 @@ from egis_agentkit.middleware.http._http_identity_middleware_impl import Identit
 from egis_agentkit.middleware.http._stream_ready_middleware_impl import StreamReady
 from fastapi.middleware import Middleware
 
+from .. import __version__
 from ..controller.base import native_user_id, register_exception_handlers
 from ._router import router
 
@@ -53,7 +54,7 @@ async def build_app(
             Middleware(StreamReady),
         ],
         title="Egis AgentKit",
-        version="0.1.0",
+        version=__version__,
     )
     app.state.egis_services, app.state.egis_config = services, config
     app.state.egis_remote_agents = kit.remote_agents
