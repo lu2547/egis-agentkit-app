@@ -2,11 +2,11 @@
 
 import os
 
+from egis_agentkit.bootstrap._demo_tools import deploy_demo_report_tools
 from egis_agentkit.client._postgres import create_postgres_engine
 from egis_agentkit.client.nacos import NacosClient, NacosConfigProvider, nacos_bootstrap
 from egis_agentkit.client.nacos._config import LivePolicies
 from egis_agentkit.core.message_bus import EgisMessageBus
-from egis_agentkit.extension.demo._demo_report_tool_impl import deploy_demo_report_tools
 from egis_agentkit.service.resource._catalog import ResourceService
 from egis_agentkit.storage import AgentKitStorage
 from egis_agentkit.storage._schema import cleanup_schema
