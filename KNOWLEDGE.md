@@ -1,6 +1,6 @@
 # AgentKit 知识库接入
 
-本说明以三个 Git worktree 的父目录 `egis-agentkit-knowledge/` 为根；入口 `README.md` 指向本文件。这里包含 `framework/`、`app/`、`frontend/`，知识库分支统一为 `knowledgebase-test1.0.0-dev`。稳定代码已合入各仓库 `main`，并建立 `1.0.0` 分支；知识库继续独立开发。运行服务和工作目录保持原有隔离方式。
+本说明以三个 Git worktree 的父目录 `egis-agentkit-knowledge/` 为根；入口 `README.md` 指向本文件。这里包含 `framework/`、`app/`、`frontend/`，知识库分支统一为 `knowledgebase-test1.0.0-dev`。稳定代码已合入各仓库 `main`，并打上发布标签 `1.0.0`；原开发目录使用 `main`，知识库继续独立开发。运行服务和工作目录保持原有隔离方式。
 
 ## 看效果
 
