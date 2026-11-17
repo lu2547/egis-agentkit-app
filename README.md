@@ -33,3 +33,21 @@ python -m egis_agentkit_app serve
 沙箱配置使用 `workspace.runtime.mode: pks` 和 `workspace.runtime.sandbox`。Manager 与 Core 实现原生通用接口；当前开发适配器通过 OpenSandbox SDK 通信，公司 PKS 需注入实际沙箱 Client，配置命名不代表公司通信实现已接通。用户工作区身份固定，各项目会话保留独立 cwd 和隔离执行绑定。文件、变更和预览管理归 Project。ReMe 为默认关闭的可选能力。
 
 验收命令、结果与边界见 [实施记录](docs/实施记录.md)。Kafka 沿用原生 drain/spawn ACK 边界，不承诺运行完成后才 ACK，也不承诺业务 exactly-once；详情见 [MessageBus 验收](../egis-agentkit-framework/docs/MessageBus验收.md)。
+
+聊天与运行中引导统一走 `POST /chat/`。普通消息不传 delivery；引导传 `delivery: "steer"`，input 可为一条用户 Msg 或按顺序排列的多条用户 Msg。每条引导带稳定 ID，重复请求保持同一 ID 和内容，不会在 cluster Inbox 重复入队。响应返回 status=queued 和 message_ids；模型下一次 reasoning 前产生对应 HINT_BLOCK 事件。等待审批时不绕过确认，当前工具和模型请求不被打断。
+
+示例请求（content 内文本块和 Msg 的时间字段可由原生 SDK 生成）：
+
+```json
+{
+  "session_id": "当前会话ID",
+  "agent_id": "当前AgentID",
+  "delivery": "steer",
+  "input": [
+    {"id": "steer-001", "role": "user", "name": "user", "content": [{"type": "text", "text": "配色改为蓝色"}]},
+    {"id": "steer-002", "role": "user", "name": "user", "content": [{"type": "text", "text": "保留原始文件"}]}
+  ]
+}
+```
+
+限制统一配置在 Nacos `agentkit.session.steering`；`/manager/runtime-options` 同步提供输入区需要的限额。

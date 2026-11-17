@@ -13,6 +13,7 @@ from ..controller import (
     team,
     user,
 )
+from ..controller.chat import router as chat_router
 from ..controller.health import router as health_router
 from ..controller.remote_agent import router as remote_agent_router
 from ..controller.user import identity_router
@@ -34,5 +35,11 @@ for controller in (
 
 
 router = APIRouter()
-for component in (manager_router, identity_router, health_router, remote_agent_router):
+for component in (
+    manager_router,
+    identity_router,
+    health_router,
+    remote_agent_router,
+    chat_router,
+):
     router.include_router(component)

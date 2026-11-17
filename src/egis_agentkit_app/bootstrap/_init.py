@@ -4,6 +4,7 @@ import os
 from contextlib import asynccontextmanager
 
 from agentscope.app import create_app
+from agentscope.app._router import chat_router as native_chat_router
 from agentscope.app.deps import get_current_user_id
 from egis_agentkit.bootstrap import init_agentkit
 from egis_agentkit.client.identity import JWTIdentity
@@ -56,6 +57,12 @@ async def build_app(
     app.state.egis_kit = kit
     app.state.egis_deployment_mode = settings.client.kafka.connection.deployment_mode
     app.dependency_overrides[get_current_user_id] = native_user_id
+    # App 接管同一个聊天入口；移除原生路由避免运行匹配与 OpenAPI 各走一份。
+    app.router.routes[:] = [
+        route
+        for route in app.router.routes
+        if getattr(route, "original_router", None) is not native_chat_router
+    ]
     app.include_router(router)
     register_exception_handlers(app)
 
