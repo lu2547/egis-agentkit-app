@@ -7,7 +7,6 @@ from pathlib import Path
 
 import yaml
 from dotenv import dotenv_values, load_dotenv, set_key
-from sqlalchemy.engine import URL
 
 ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / "egis/egis-agentkit-app"
@@ -22,20 +21,11 @@ async def main():
     existing = dotenv_values(env_path)
     pg = dotenv_values(ROOT / "deploy/agentkit-infra/pg.env")
     demo = dotenv_values(ROOT / "demo/agentscope-demo/.env")
-    database_url = URL.create(
-        "postgresql+asyncpg",
-        username=pg["POSTGRES_USER"],
-        password=pg["POSTGRES_PASSWORD"],
-        host="127.0.0.1",
-        port=5433,
-        database=pg["POSTGRES_DB"],
-    ).render_as_string(hide_password=False)
     values = {
         "NACOS_SERVER_URL": "http://127.0.0.1:8848",
         "NACOS_CONSOLE_URL": "http://127.0.0.1:8080",
         "NACOS_IDENTITY_KEY": "agentkit",
         "NACOS_IDENTITY_VALUE": "agentkit-dev",
-        "AGENTKIT_DATABASE_URL": database_url,
         "AGENTKIT_JWT_SECRET": secrets.token_urlsafe(48),
         "AGENTKIT_DOWNLOAD_SECRET": secrets.token_urlsafe(48),
         "AGENTKIT_DEMO_PASSWORD": secrets.token_urlsafe(24),
@@ -59,6 +49,16 @@ async def main():
     example = APP.parent / "egis-agentkit-framework/examples/nacos/agentkit.yaml"
     document = yaml.safe_load(example.read_text())
     settings = document["agentkit"]
+    settings["client"]["postgres"]["connection"] = {
+        "mode": "key",
+        "host": "127.0.0.1",
+        "port": 5433,
+        "database": pg["POSTGRES_DB"],
+        "username": pg["POSTGRES_USER"],
+        "password": pg["POSTGRES_PASSWORD"],
+        "connectTimeoutSeconds": 10.0,
+        "sslMode": "disable",
+    }
     settings["workspace"]["runtime"]["root"] = str(APP / "var/workspace")
     settings["client"]["kafka"]["connection"]["deploymentMode"] = "cluster"
     settings["user"]["identity"].update(

@@ -23,19 +23,12 @@ async def build_app(
     settings = config.snapshot
     identity_settings = settings.user.identity
     download = settings.project.download
-    database_url = os.environ.get(settings.client.postgres.connection.url_env)
     download_secret = os.environ.get(download.secret_env)
-    if (
-        not database_url
-        or not download_secret
-        or len(download_secret) < download.min_secret_length
-    ):
-        raise ValueError("必须配置 PG 连接和统一 download_secret 部署密钥")
+    if not download_secret or len(download_secret) < download.min_secret_length:
+        raise ValueError("必须配置统一 download_secret 部署密钥")
 
     identity = JWTIdentity(identity_settings)
-    kit = init_agentkit(
-        config, client, database_url, engine=engine, owns_client=owns_client
-    )
+    kit = init_agentkit(config, client, engine=engine, owns_client=owns_client)
     services, bus = kit.services, kit.bus
     app = create_app(
         storage=kit.native_storage,

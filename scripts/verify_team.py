@@ -8,19 +8,25 @@ from pathlib import Path
 import httpx
 from agentscope.app.message_bus import MessageBusKeys
 from dotenv import load_dotenv
+from egis_agentkit.client._postgres import (
+    create_postgres_engine_from_config,
+    postgres_url,
+)
+from egis_agentkit.client.nacos import NacosClient, NacosConfigProvider, nacos_bootstrap
 from egis_agentkit.core.message_bus import EgisMessageBus
 from egis_agentkit.storage import AgentKitStorage
-from sqlalchemy.ext.asyncio import create_async_engine
 
 APP = Path(__file__).resolve().parents[1]
 
 
 async def main():
     load_dotenv(APP / ".env")
-    engine = create_async_engine(
-        os.environ["AGENTKIT_DATABASE_URL"], hide_parameters=True
-    )
-    storage = AgentKitStorage(os.environ["AGENTKIT_DATABASE_URL"], engine)
+    async with NacosClient(nacos_bootstrap()) as nacos:
+        config = NacosConfigProvider(nacos)
+        await config.refresh()
+        postgres = config.snapshot.client.postgres
+    engine = create_postgres_engine_from_config(postgres)
+    storage = AgentKitStorage(postgres_url(postgres), engine)
     # Replay reads use only PG; this acceptance reader never enters a Kafka
     # group or competes with the application's Dispatcher for a trigger.
     replay = EgisMessageBus(deployment_mode="cluster", engine=engine)

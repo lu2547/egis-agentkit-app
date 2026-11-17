@@ -15,7 +15,13 @@ async def serve(host, port):
         await provider.refresh()
         app = await build_app(provider, client, owns_client=False)
         await uvicorn.Server(
-            uvicorn.Config(app, host=host, port=port, log_level="info", access_log=True)
+            uvicorn.Config(
+                app,
+                host=host,
+                port=port,
+                log_level=provider.snapshot.logging.level.lower(),
+                access_log=provider.snapshot.logging.access_log,
+            )
         ).serve()
 
 

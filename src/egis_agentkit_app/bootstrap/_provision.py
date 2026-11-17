@@ -1,9 +1,10 @@
 """Explicit additive provisioning and named demo fixtures; never run on serve."""
 
-import os
-
 from egis_agentkit.bootstrap._demo_tools import deploy_demo_report_tools
-from egis_agentkit.client._postgres import create_postgres_engine
+from egis_agentkit.client._postgres import (
+    create_postgres_engine_from_config,
+    postgres_url,
+)
 from egis_agentkit.client.nacos import NacosClient, NacosConfigProvider, nacos_bootstrap
 from egis_agentkit.client.nacos._config import LivePolicies
 from egis_agentkit.core.message_bus import EgisMessageBus
@@ -22,12 +23,8 @@ async def provision(command, *, database=None, apply=False):
         await provider.refresh()
         settings = provider.snapshot
         postgres = settings.client.postgres
-        url = os.environ[postgres.connection.url_env]
-        engine = create_postgres_engine(
-            url,
-            pool_size=postgres.pool.size,
-            max_overflow=postgres.pool.max_overflow,
-        )
+        url = postgres_url(postgres)
+        engine = create_postgres_engine_from_config(postgres)
         try:
             if command in {"cleanup-db", "upgrade-db"}:
                 if command == "upgrade-db":

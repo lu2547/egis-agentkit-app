@@ -26,6 +26,8 @@ python -m egis_agentkit_app serve
 
 `/health/ready` 检查 PG 与 MessageBus 状态，并暴露 Nacos 连接、配置版本和重启需求。全框架读取一份 `agentkit.yaml`；更改内容必须递增 `agentkit.revision`。基础设施、认证、工作区和存储等固定装配配置变化需要重启；包含重启项的快照在旧进程中整份保留，重启后采用。
 
+数据库连接参数统一由 Nacos `agentkit.client.postgres.connection` 提供，mode 为 key 时读取 password，mode 为 cyberark 时调用 CCP REST 取密；API 与管理命令均使用同一连接池创建入口，不读取 `.env` 完整连接串。日志从 `agentkit.logging` 读取，默认 INFO/JSON 输出到标准输出；`client.tracing` 配置 Phoenix OTLP HTTP 导出，需开启 enabled。框架管理连接与关闭，埋点复用原生 TracingMiddleware。
+
 专家可以使用平台工具、Skill 和 MCP。第三方专家由 HTTP 或 WebSocket 接入，会话运行时按权限加载定义和绑定资源。
 
 沙箱配置使用 `workspace.runtime.mode: pks` 和 `workspace.runtime.sandbox`。Manager 与 Core 实现原生通用接口；当前开发适配器通过 OpenSandbox SDK 通信，公司 PKS 需注入实际沙箱 Client，配置命名不代表公司通信实现已接通。用户工作区身份固定，各项目会话保留独立 cwd 和隔离执行绑定。文件、变更和预览管理归 Project。ReMe 为默认关闭的可选能力。
