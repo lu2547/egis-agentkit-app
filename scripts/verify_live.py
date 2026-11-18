@@ -25,9 +25,7 @@ async def run_reply(client, task, prompt, *, allow_write=None, interrupt=False):
     cursor = history.json().get("event_cursor")
     if cursor:
         params["after"] = cursor
-    async with client.stream(
-        "GET", f"/sessions/{sid}/stream", params=params
-    ) as stream:
+    async with client.stream("GET", f"/sessions/{sid}/stream", params=params) as stream:
         stream.raise_for_status()
         trigger = await client.post(
             "/chat/",
@@ -104,15 +102,12 @@ async def main(check_hitl, check_stop):
     async with httpx.AsyncClient(
         base_url="http://127.0.0.1:38092", timeout=180
     ) as client:
-        login = await client.post(
-            "/auth/login",
-            json={
-                "user_id": "demo.user",
-                "password": os.environ["AGENTKIT_DEMO_PASSWORD"],
-            },
+        client.headers["Authorization"] = (
+            "Bearer " + os.environ["AGENTKIT_ACCESS_TOKEN"]
         )
-        login.raise_for_status()
-        client.headers["Authorization"] = "Bearer " + login.json()["access_token"]
+        identity = await client.get("/manager/me")
+        identity.raise_for_status()
+        user_id = identity.json()["user_id"]
         catalog = []
         params = {}
         while True:
@@ -155,7 +150,9 @@ async def main(check_hitl, check_stop):
             "请调用 CreateDemoReport，标题“企业 AgentKit 联调报告”，findings为[“PG与Nacos已连接”,“Kafka消费组已启用”,“产物可在右侧预览”]，交付report.md。无需额外检索，不使用Bash。最后用一句中文告知文件名。",
         )
         project_path = f"/manager/projects/{task['project_id']}"
-        response = await client.get(f"{project_path}/files", params={"area": "artifacts"})
+        response = await client.get(
+            f"{project_path}/files", params={"area": "artifacts"}
+        )
         response.raise_for_status()
         assert any(row["name"] == "report.md" for row in response.json()["items"])
         artifact = await client.get(
@@ -190,7 +187,9 @@ async def main(check_hitl, check_stop):
             hitl_task = response.json()
             target = (
                 workspace_root
-                / "user/demo.user/projects"
+                / "user"
+                / user_id
+                / "projects"
                 / hitl_task["project_id"]
                 / ".work"
                 / "check.txt"

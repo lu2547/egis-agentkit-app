@@ -53,7 +53,6 @@ async def build_app(
     app.state.egis_services, app.state.egis_config = services, config
     app.state.egis_remote_agents = kit.remote_agents
     app.state.egis_bus = bus
-    app.state.egis_identity = identity
     app.state.egis_kit = kit
     app.state.egis_deployment_mode = settings.client.kafka.connection.deployment_mode
     app.dependency_overrides[get_current_user_id] = native_user_id

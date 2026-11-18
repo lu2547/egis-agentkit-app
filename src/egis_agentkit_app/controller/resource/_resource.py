@@ -5,13 +5,24 @@ from urllib.parse import quote
 
 from egis_agentkit.service._user import require_admin
 from egis_agentkit.storage.model import User
-from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 
 from ..base import current_user, services
 from ._model import (
     ConnectorCallbackWrite,
     ConnectorKeyWrite,
     InstallWrite,
+    SkillImportDecision,
     SkillImportJob,
     SkillImportList,
 )
@@ -29,19 +40,16 @@ def add_resource_routes():
         def build_endpoints(kind):
             async def list_resources(request: Request, user=Depends(current_user)):
                 service = services(request).resources
-                result = {"items": await service.list(user, kind)}
-                if kind == "mcp":
-                    dependencies = await service.mcp_dependency_authorizations(user)
-                    if dependencies:
-                        result["dependency_authorizations"] = dependencies
-                return result
+                return {"items": await service.list(user, kind)}
 
             async def get_resource(
                 identifier: str,
                 request: Request,
-                version: str = Query(...),
+                version: str | None = None,
                 user=Depends(current_user),
             ):
+                if version is None and kind != "mcp":
+                    raise HTTPException(status_code=422, detail="version is required")
                 return await services(request).resources.detail(
                     user, kind, identifier, version
                 )
@@ -52,16 +60,9 @@ def add_resource_routes():
                 identifier: str | None = None,
                 user=Depends(current_user),
             ):
-                if kind == "mcp" and "resource_version" in body:
-                    raise ValueError("连接器版本由平台分配")
                 if identifier:
                     body = {**body, "resource_id": identifier}
-                service = services(request).resources
-                return await (
-                    service.save_skill(user, body)
-                    if kind == "skill"
-                    else service.save_mcp(user, body)
-                )
+                return await services(request).resources.save_skill(user, body)
 
             async def add_installation(
                 identifier: str,
@@ -121,7 +122,7 @@ def add_resource_routes():
         router.add_api_route(
             f"/{path}", list_resources, methods=["GET"], name=f"list_{path}"
         )
-        if resource_type != "tool":
+        if resource_type == "skill":
             router.add_api_route(
                 f"/{path}", save_resource, methods=["POST"], name=f"create_{path}"
             )
@@ -134,12 +135,13 @@ def add_resource_routes():
         router.add_api_route(
             f"/{path}/{{identifier}}", get_resource, methods=["GET"], name=f"get_{path}"
         )
-        router.add_api_route(
-            f"/{path}/{{identifier}}/versions",
-            list_versions,
-            methods=["GET"],
-            name=f"versions_{path}",
-        )
+        if resource_type != "mcp":
+            router.add_api_route(
+                f"/{path}/{{identifier}}/versions",
+                list_versions,
+                methods=["GET"],
+                name=f"versions_{path}",
+            )
         if resource_type != "tool":
             router.add_api_route(
                 f"/{path}/{{identifier}}/install",
@@ -168,10 +170,19 @@ async def upload_skill(
     file: UploadFile = File(...),
     category: str = Form("other"),
     avatar: str = Form("book"),
+    owner_type: Literal["user", "system"] = Form("user"),
+    resource_id: str | None = Form(None, max_length=128),
     user=Depends(current_user),
 ):
     return await services(request).skill_imports.enqueue(
-        user, file.file, filename=file.filename, category=category, avatar=avatar
+        user,
+        file.file,
+        filename=file.filename,
+        category=category,
+        avatar=avatar,
+        owner_type=owner_type,
+        virtual=getattr(request.state, "egis_virtual_user", False),
+        resource_id=resource_id,
     )
 
 
@@ -191,6 +202,28 @@ async def get_skill_import(job_id: str, request: Request, user=Depends(current_u
 async def retry_skill_import(job_id: str, request: Request, user=Depends(current_user)):
     return await services(request).skill_imports.retry(user, job_id)
 
+@router.get("/admin/skill-imports", response_model=SkillImportList)
+async def list_skill_import_reviews(request: Request, user=Depends(current_user)):
+    return {"items": await services(request).skill_imports.list_reviews(user)}
+
+
+@router.post("/admin/skill-imports/batch/decision")
+async def decide_skill_import_reviews(
+    body: SkillImportDecision, request: Request, user=Depends(current_user)
+):
+    items = await services(request).skill_imports.decide_batch(
+        user, body.job_ids, approved=body.approved, reason=body.reason
+    )
+    return {"items": items}
+
+
+@router.get("/admin/skill-imports/{job_id}/download")
+async def download_skill_import_review(
+    job_id: str, request: Request, user=Depends(current_user)
+):
+    filename, content = await services(request).skill_imports.download_review(user, job_id)
+    return _zip_download(content, filename)
+
 
 @router.get("/skills/{identifier}/download")
 async def download_skill(
@@ -202,6 +235,10 @@ async def download_skill(
     content = await services(request).resources.download_skill(
         user, identifier, version
     )
+    return _zip_download(content, identifier + ".zip")
+
+
+def _zip_download(content, filename):
     return Response(
         content,
         media_type="application/zip",
@@ -209,7 +246,7 @@ async def download_skill(
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": "attachment; filename*=UTF-8''"
-            + quote(identifier + ".zip"),
+            + quote(filename, safe=""),
         },
     )
 
@@ -218,10 +255,9 @@ async def download_skill(
 async def test_connector(
     identifier: str,
     request: Request,
-    version: str = Query(...),
     user=Depends(current_user),
 ):
-    return await services(request).resources.test_mcp(user, identifier, version)
+    return await services(request).resources.test_mcp(user, identifier)
 
 
 add_resource_routes()
@@ -229,10 +265,10 @@ add_resource_routes()
 
 @router.get("/connectors/{identifier}/authorization")
 async def connector_auth_status(
-    identifier: str, request: Request, version: str, user=Depends(current_user)
+    identifier: str, request: Request, user=Depends(current_user)
 ):
     return await services(request).resources.mcp_auth_action(
-        user, identifier, version, "status"
+        user, identifier, "status"
     )
 
 
@@ -241,24 +277,22 @@ async def connector_api_key(
     identifier: str,
     body: ConnectorKeyWrite,
     request: Request,
-    version: str,
     user=Depends(current_user),
 ):
     return await services(request).resources.mcp_auth_action(
         user,
         identifier,
-        version,
         "set_api_key",
         key=body.key.get_secret_value(),
     )
 
 
-@router.post("/connectors/{identifier}/authorization/start")
+@router.post("/connectors/{identifier}/authorize")
 async def connector_oauth_start(
-    identifier: str, request: Request, version: str, user=Depends(current_user)
+    identifier: str, request: Request, user=Depends(current_user)
 ):
     return await services(request).resources.mcp_auth_action(
-        user, identifier, version, "start"
+        user, identifier, "start"
     )
 
 
@@ -267,13 +301,11 @@ async def connector_oauth_callback(
     identifier: str,
     body: ConnectorCallbackWrite,
     request: Request,
-    version: str,
     user=Depends(current_user),
 ):
     return await services(request).resources.mcp_auth_action(
         user,
         identifier,
-        version,
         "callback",
         state=body.state,
         code=body.code.get_secret_value() if body.code is not None else None,
@@ -282,10 +314,10 @@ async def connector_oauth_callback(
 
 @router.delete("/connectors/{identifier}/authorization")
 async def connector_revoke(
-    identifier: str, request: Request, version: str, user=Depends(current_user)
+    identifier: str, request: Request, user=Depends(current_user)
 ):
     return await services(request).resources.mcp_auth_action(
-        user, identifier, version, "revoke"
+        user, identifier, "revoke"
     )
 
 
@@ -308,8 +340,6 @@ async def register_system_resource(
     data = {**body, "owner_type": "system", "owner_id": "system"}
     if kind == "skill":
         return await service.save_skill(user, data)
-    if "resource_version" in data:
-        raise ValueError("连接器版本由平台分配")
     return await service.save_mcp(user, data)
 
 
@@ -319,9 +349,11 @@ async def update_resource_availability(
     identifier: str,
     body: InstallWrite,
     request: Request,
-    version: str,
+    version: str | None = None,
     user=Depends(current_user),
 ):
+    if version is None and kind != "mcp":
+        raise HTTPException(status_code=422, detail="version is required")
     return await services(request).resources.set_asset_enabled(
         user,
         kind,

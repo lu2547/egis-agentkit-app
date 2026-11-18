@@ -37,17 +37,12 @@ async def main():
             health = await client.get("/health/ready")
             health.raise_for_status()
             assert health.json()["deployment_mode"] == "cluster"
-            response = await client.post(
-                "/auth/login",
-                json={
-                    "user_id": "demo.user",
-                    "password": os.environ["AGENTKIT_DEMO_PASSWORD"],
-                },
-            )
-            response.raise_for_status()
             client.headers["Authorization"] = (
-                "Bearer " + response.json()["access_token"]
+                "Bearer " + os.environ["AGENTKIT_ACCESS_TOKEN"]
             )
+            response = await client.get("/manager/me")
+            response.raise_for_status()
+            user_id = response.json()["user_id"]
             response = await client.get("/manager/teams")
             response.raise_for_status()
             source = next(
@@ -68,9 +63,9 @@ async def main():
             task = response.json()
             async with storage:
                 session = await storage.read_session_unscoped(
-                    "demo.user", task["agent_id"], task["session_id"]
+                    user_id, task["agent_id"], task["session_id"]
                 )
-                team = await storage.get_team("demo.user", session.team_id)
+                team = await storage.get_team(user_id, session.team_id)
             response = await client.post(
                 "/chat/",
                 json={

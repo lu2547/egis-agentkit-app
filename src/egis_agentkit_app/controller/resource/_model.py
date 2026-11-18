@@ -1,7 +1,7 @@
 """resource 领域的 HTTP 请求与响应模型。"""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, SecretStr
 
@@ -17,7 +17,9 @@ class SkillImportJob(BaseModel):
     filename: str
     category: str
     avatar: str
-    status: Literal["queued", "running", "succeeded", "failed"]
+    status: Literal[
+        "queued", "running", "pending_approval", "succeeded", "failed", "rejected"
+    ]
     stage: str
     progress: int
     attempts: int
@@ -25,12 +27,24 @@ class SkillImportJob(BaseModel):
     resource_version: str | None = None
     error: str | None = None
     result: dict | None = None
+    owner_type: Literal["user", "system"]
+    uploader_type: Literal["user", "admin", "virtual"]
+    uploaded_by: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    review_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class SkillImportList(BaseModel):
     items: list[SkillImportJob]
+
+
+class SkillImportDecision(Request):
+    job_ids: list[Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]]
+    approved: bool
+    reason: str = Field(default="", max_length=1000)
 
 
 class ConnectorKeyWrite(BaseModel):

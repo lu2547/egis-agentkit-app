@@ -18,17 +18,43 @@ WorkBuddy 启动与 HTTP 组合应用。首版已实现，前端在相邻的 `eg
 python -m egis_agentkit_app serve
 ```
 
-企业首次建表可交由 DBA 执行 [pg.sql](../egis-agentkit-framework/scripts/init/pg.sql)，应用启动时登记默认工具。现有 `init-db` CLI 也提供程序化建表和 Topic 初始化，但不创建初始管理员。`seed` 只用于导入演示用户、专家、Team、Skill/MCP 和演示授权，不属于企业首次初始化。`bootstrap_demo.py` 依赖已有本机基础设施和 Demo 密钥，不是企业环境初始化入口。
+### Windows Agent 的 NAS 文件服务
+
+在 Nacos 的 `agentkit.workspace.files` 中设置 `win: true`，将 `endpoint` 设为 Linux 文件服务的内网 HTTP(S) 地址，并通过 `tokenEnv` 指定两端注入同一凭据的环境变量名，默认是 `AGENTKIT_NAS_FILE_TOKEN`。Agent 继续用 `serve` 启动。已有本地挂载的 Agent 使用 `win: false`，默认走本地文件访问。项目 ReMe 记忆需要 `win: false`。
+
+在 Linux 主机准备好 `agentkit.workspace.runtime.root` 和 `agentkit.skill.storage.root` 对应的 NAS 目录，以及 Nacos 连接配置，再启动独立文件服务。
+
+```sh
+python -m egis_agentkit_app serve-files --host 127.0.0.1 --port 38093
+```
+
+跨主机部署时，由内网 HTTPS 代理转发到文件服务，或通过 `--host` 绑定受控的内网地址。文件服务启动时读取 Nacos 配置，文件访问设置或存储限额变更后需重启。该进程只提供受管 NAS 文件接口，PG、Kafka 和沙箱生命周期由现有 Agent 服务负责。
+
+### 应用初始化
+
+企业首次建表可交由 DBA 执行 [pg.sql](../egis-agentkit-framework/scripts/init/pg.sql)。`init-db` CLI 也可初始化表、Topic 和默认工具。首位管理员先完成登录登记，再由部署人员运行 `python -m egis_agentkit_app provision-admin --user-id <用户ID>`。`seed --user-id <已登记的管理员ID>` 可选，用于导入示例资源和示例资源组授权，组成员由管理员维护。
 
 本机真实模型验收使用已有 agentscope-demo 的模型配置。正式公司推理网关可在 Nacos 更换模型、地址与凭据环境变量引用；当前 Adapter 使用原生 OpenAI 兼容协议，未把演示公共模型地址称作公司网关。
 
-应用地址 `http://127.0.0.1:38092`，前端地址 `http://127.0.0.1:5179`。演示用户 `demo.user`，管理员 `demo.admin`；演示登录密码保存在本项目 `.env` 的 `AGENTKIT_DEMO_PASSWORD`，不写入前端或文档。正式环境由 Nacos 配置 RS256/JWKS、issuer、audience，令牌由公司身份服务签发。
+应用地址 `http://127.0.0.1:38092`，前端地址 `http://127.0.0.1:5179`。登录由外部身份服务处理，App 根据 Nacos 中的 RS256/JWKS、issuer 和 audience 校验令牌。开发登录见 [Egis AgentKit Mock](../egis-agentkit-mock/README.md)。`scripts/verify_live.py` 和 `scripts/verify_team.py` 从 `AGENTKIT_ACCESS_TOKEN` 读取已签发的访问令牌。
 
 `/health/ready` 检查 PG 与 MessageBus 状态，并暴露 Nacos 连接、配置版本和重启需求。全框架读取一份 `agentkit.yaml`；更改内容必须递增 `agentkit.revision`。基础设施、认证、工作区和存储等固定装配配置变化需要重启；包含重启项的快照在旧进程中整份保留，重启后采用。
 
 数据库连接参数统一由 Nacos `agentkit.client.postgres.connection` 提供，mode 为 key 时读取 password，mode 为 cyberark 时调用 CCP REST 取密；API 与管理命令均使用同一连接池创建入口，不读取 `.env` 完整连接串。日志从 `agentkit.logging` 读取，默认 INFO/JSON 输出到标准输出；`client.tracing` 配置 Phoenix OTLP HTTP 导出，需开启 enabled。框架管理连接与关闭，埋点复用原生 TracingMiddleware。
 
 专家可以使用平台工具、Skill 和 MCP。第三方专家由 HTTP 或 WebSocket 接入，会话运行时按权限加载定义和绑定资源。
+
+系统 Skills 助手由 `init-db` 初始化并授予公司组使用权限。已建库的环境可运行 `python -m egis_agentkit_app provision-skill-assistant` 初始化此专家。用户可在助手对话中上传 ZIP 并要求安装，也可描述要复用的工作方法并要求创建个人技能。
+
+### 公司组与 MCP
+
+用户首次登录时写入用户表并加入 Nacos `agentkit.access.companyGroupId` 指定的公司组，默认 ID 为 `company`。已有账号的成员关系由管理台维护。
+
+管理员在「管理 → MCP 维护」登记、编辑和启停连接器。每个 ID 维护一条当前配置，启用后通过公司组在连接器广场可见。OAuth 连接器先由用户完成授权，再添加到个人助理。取消添加会保留授权。服务地址或认证配置变化后，用户需要重新授权。
+
+OAuth 环境在 Nacos 配置 `agentkit.connector.oauth.redirectUri` 为前端 HTTPS 地址（路径 `/connectors/oauth/callback`），并按 `credentialKeyEnv` 注入凭据加密密钥。连接配置和授权存 PostgreSQL，会话开始时按当前权限装配到沙箱网关。
+
+升级已有库时，先按数据库说明执行 `upgrade-db` 预览。`upgrade-db --apply` 会停用并保留历史 MCP 记录。管理员核对服务地址后，可以用原 ID 覆盖当前配置并启用。存量连接凭据需要重新授权。
 
 沙箱配置使用 `workspace.runtime.mode: pks` 和 `workspace.runtime.sandbox`。Manager 与 Core 实现原生通用接口；当前开发适配器通过 OpenSandbox SDK 通信，公司 PKS 需注入实际沙箱 Client，配置命名不代表公司通信实现已接通。用户工作区身份固定，各项目会话保留独立 cwd 和隔离执行绑定。文件、变更和预览管理归 Project。ReMe 为默认关闭的可选能力。
 

@@ -16,7 +16,6 @@ from ..controller import (
 from ..controller.chat import router as chat_router
 from ..controller.health import router as health_router
 from ..controller.remote_agent import router as remote_agent_router
-from ..controller.user import identity_router
 
 manager_router = APIRouter(prefix="/manager", tags=["manager"])
 
@@ -37,7 +36,6 @@ for controller in (
 router = APIRouter()
 for component in (
     manager_router,
-    identity_router,
     health_router,
     remote_agent_router,
     chat_router,

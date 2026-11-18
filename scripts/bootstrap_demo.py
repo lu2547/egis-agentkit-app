@@ -26,9 +26,7 @@ async def main():
         "NACOS_CONSOLE_URL": "http://127.0.0.1:8080",
         "NACOS_IDENTITY_KEY": "agentkit",
         "NACOS_IDENTITY_VALUE": "agentkit-dev",
-        "AGENTKIT_JWT_SECRET": secrets.token_urlsafe(48),
         "AGENTKIT_DOWNLOAD_SECRET": secrets.token_urlsafe(48),
-        "AGENTKIT_DEMO_PASSWORD": secrets.token_urlsafe(24),
         "AGENTKIT_MODEL_API_KEY": demo.get("API_KEY", ""),
     }
     for key, value in values.items():
@@ -62,7 +60,8 @@ async def main():
     settings["workspace"]["runtime"]["root"] = str(APP / "var/workspace")
     settings["client"]["kafka"]["connection"]["deploymentMode"] = "cluster"
     settings["user"]["identity"].update(
-        mode="demo", issuer="egis-agentkit-demo", algorithm="HS256", jwksUrl=None
+        issuer="urn:egis:agentkit:mock",
+        jwksUrl="http://127.0.0.1:38093/.well-known/jwks.json",
     )
     settings["model"]["catalog"]["models"][0].update(
         displayName="DeepSeek V4 Flash",

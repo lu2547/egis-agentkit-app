@@ -119,6 +119,15 @@ async def invite_collaborators(
     )
 
 
+@router.delete("/tasks/{sid}/collaborators/{worker_sid}")
+async def remove_collaborator(
+    sid: str, worker_sid: str, request: Request, user=Depends(current_user)
+):
+    return await TeamCollaborationService.remove_collaborator(
+        services(request).sessions, user, sid, worker_sid, request.app.state.egis_bus
+    )
+
+
 @router.patch("/tasks/{sid}/settings")
 async def update_task_settings(
     sid: str, body: TaskSettingsWrite, request: Request, user=Depends(current_user)

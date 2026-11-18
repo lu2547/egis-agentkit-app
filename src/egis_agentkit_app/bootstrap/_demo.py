@@ -6,12 +6,15 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from egis_agentkit.service._user import UserService
 from egis_agentkit.service.access._grant import GrantService
 from egis_agentkit.service.agent._agent_manager import AgentManager
 from egis_agentkit.service.team._definition import TeamDefinition
 from egis_agentkit.storage import tables as t
 from egis_agentkit.storage.model import AgentDefinition, Grant, Group
+from egis_agentkit.storage.model._resource import (
+    MCP_STORAGE_VERSION,
+    is_managed_connector,
+)
 from sqlalchemy import select
 
 
@@ -19,18 +22,11 @@ def identifier(name):
     return uuid5(NAMESPACE_URL, "egis-agentkit-demo:" + name).hex
 
 
-async def seed_demo(storage, provider, resources):
-    users = UserService(storage)
-    await users.sync_identity("demo.admin", "演示管理员")
-    await users.provision_admin("demo.admin", actor="explicit-demo-seed")
-    admin = await users.get("demo.admin")
-    await users.sync_identity("demo.user", "演示用户")
-    await users.save_group(admin, Group(group_id="egis-demo", group_name="演示工作组"))
-    for uid in ("demo.admin", "demo.user"):
-        user = await users.get(uid)
-        if "egis-demo" not in user.group_ids:
-            user.group_ids.append("egis-demo")
-            await users.update_user(admin, user)
+async def seed_demo(storage, provider, resources, admin):
+    async with storage.users.write() as writer:
+        await writer.ensure_group(
+            Group(group_id="egis-demo", group_name="演示工作组"), actor=admin.user_id
+        )
     if await storage.assets.get("skill", "egis-demo-report", "1.0.0") is None:
         default_skill = (
             Path(__file__).resolve().parents[5]
@@ -53,14 +49,12 @@ async def seed_demo(storage, provider, resources):
             owner_type="system",
             owner_id="egis-demo",
         )
-    if await storage.assets.get("mcp", "egis-demo-tools", "1.0.0") is None:
+    connector = await storage.assets.get("mcp", "egis-demo-tools", MCP_STORAGE_VERSION)
+    if connector is None or not is_managed_connector(connector):
         await resources.save_mcp(
             admin,
             {
                 "resource_id": "egis-demo-tools",
-                "resource_version": "1.0.0",
-                "owner_type": "system",
-                "owner_id": "egis-demo",
                 "display_name": "报告与计算连接器",
                 "config": {
                     "transport": "streamable_http",
@@ -70,13 +64,15 @@ async def seed_demo(storage, provider, resources):
                 },
             },
         )
+        if connector is not None and not connector["is_enabled"]:
+            await resources.set_asset_enabled(admin, "mcp", "egis-demo-tools", None, True, admin=True)
     agents = AgentManager(storage, provider.snapshot.access, config_provider=provider)
     grants = GrantService(storage)
     bindings = [
         {
             "resource_type": kind,
             "resource_id": name,
-            "resource_version": "1.0.0",
+            **({"resource_version": "1.0.0"} if kind != "mcp" else {}),
             "resource_view_type": "system",
         }
         for kind, name in (
@@ -227,11 +223,8 @@ async def seed_demo(storage, provider, resources):
             resource_owner_id="egis-demo",
         ),
     )
-    personal = resources.personal
-    for uid in ("demo.admin", "demo.user"):
-        await personal.get_or_add_definition(await users.get(uid))
     print(
-        "Seeded demo.admin/demo.user, one Group, six experts, one fixed Team, local Skill/MCP catalog and deployed report tool"
+        "Seeded one Group, six experts, one fixed Team, local Skill/MCP catalog and deployed report tool"
     )
     print(
         "Five expert grants and one Group Team grant explicitly configured; finance expert remains denied"
