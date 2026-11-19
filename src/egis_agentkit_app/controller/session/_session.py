@@ -152,7 +152,14 @@ async def rename_task(
 
 @router.get("/tasks/{sid}")
 async def get_task(sid: str, request: Request, user=Depends(current_user)):
-    return await services(request).sessions.get_session(user, sid)
+    task = await services(request).sessions.get_session(user, sid)
+    progress = getattr(request.app.state.egis_bus, "collaborator_progress", None)
+    if progress is not None and task["collaboration_allowed"]:
+        members = {member.get("worker_session_id") for member in task["collaborators"]}
+        task["collaborator_progress"] = [
+            item for item in await progress.list(sid) if item["worker_session_id"] in members
+        ]
+    return task
 
 
 @router.delete("/tasks/{sid}", status_code=204)

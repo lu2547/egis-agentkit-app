@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from egis_agentkit.service.agent._agent_manager import CATALOG_TYPES
+from egis_agentkit.service.team._candidates import ExpertCandidates
 from egis_agentkit.storage.model import (
     AgentDefinition,
     AgentType,
@@ -56,7 +57,8 @@ async def page_agents(
     mine: bool = False,
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
-    return await services(request).agents.page_definitions(
+    agents = services(request).agents
+    page = await agents.page_definitions(
         user,
         types=types or CATALOG_TYPES,
         cursor=cursor,
@@ -66,6 +68,39 @@ async def page_agents(
         category=category,
         mine=mine,
     )
+    if catalog and page["items"]:
+        selected = await ExpertCandidates(agents.permissions).selections(user)
+        for expert in page["items"]:
+            expert["is_invite_candidate"] = (
+                expert["id"], expert["resource_view_type"]
+            ) in selected
+    return page
+
+
+@router.put("/agents/{identifier}/invite-candidate", status_code=204)
+async def add_expert_candidate(
+    definition_id: Annotated[str, Path(alias="identifier")],
+    request: Request,
+    view: ViewType,
+    user: User = Depends(current_user),
+) -> Response:
+    await ExpertCandidates(services(request).agents.permissions).add(
+        user, definition_id, view
+    )
+    return Response(status_code=204)
+
+
+@router.delete("/agents/{identifier}/invite-candidate", status_code=204)
+async def remove_expert_candidate(
+    definition_id: Annotated[str, Path(alias="identifier")],
+    request: Request,
+    view: ViewType,
+    user: User = Depends(current_user),
+) -> Response:
+    await ExpertCandidates(services(request).agents.permissions).remove(
+        user, definition_id, view
+    )
+    return Response(status_code=204)
 
 
 @router.get("/agents/{identifier}")
