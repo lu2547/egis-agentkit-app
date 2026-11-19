@@ -1,6 +1,7 @@
 """Compose native create_app. Never mount it under a second FastAPI lifespan."""
 
 import os
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 
 from agentscope.app import create_app
@@ -9,7 +10,9 @@ from agentscope.app.deps import get_current_user_id
 from egis_agentkit.bootstrap import init_agentkit
 from egis_agentkit.client.identity import JWTIdentity
 from egis_agentkit.client.nacos import NacosClient, NacosConfigProvider
+from egis_agentkit.client.sandbox import SandboxClient
 from egis_agentkit.middleware.http._http_identity_middleware_impl import IdentityGuard
+from egis_agentkit.middleware.http._request_logging import RequestLogging
 from egis_agentkit.middleware.http._stream_ready_middleware_impl import StreamReady
 from fastapi.middleware import Middleware
 
@@ -19,8 +22,15 @@ from ._router import router
 
 
 async def build_app(
-    config: NacosConfigProvider, client: NacosClient, *, engine=None, owns_client=True
+    config: NacosConfigProvider,
+    client: NacosClient,
+    *,
+    engine=None,
+    owns_client=True,
+    manage_logging: bool = True,
+    sandbox_client_factory: Callable[[], SandboxClient] | None = None,
 ):
+    """组装 HTTP 应用，向 Framework 传递部署方提供的沙箱 Client 工厂。"""
     settings = config.snapshot
     identity_settings = settings.user.identity
     download = settings.project.download
@@ -29,7 +39,14 @@ async def build_app(
         raise ValueError("必须配置统一 download_secret 部署密钥")
 
     identity = JWTIdentity(identity_settings)
-    kit = init_agentkit(config, client, engine=engine, owns_client=owns_client)
+    kit = init_agentkit(
+        config,
+        client,
+        engine=engine,
+        owns_client=owns_client,
+        manage_logging=manage_logging,
+        sandbox_client_factory=sandbox_client_factory,
+    )
     services, bus = kit.services, kit.bus
     app = create_app(
         storage=kit.native_storage,
@@ -46,6 +63,7 @@ async def build_app(
         extra_middlewares=[
             Middleware(IdentityGuard, identity=identity, services=services),
             Middleware(StreamReady),
+            Middleware(RequestLogging, access_log=settings.logging.access_log),
         ],
         title="Egis AgentKit",
         version=__version__,

@@ -3,6 +3,8 @@
 from typing import Literal
 from urllib.parse import quote
 
+from egis_agentkit.core.skill._avatar import AUTO_AVATAR
+from egis_agentkit.service._admin_page import AdminPageResult
 from egis_agentkit.service._user import require_admin
 from egis_agentkit.storage.model import User
 from fastapi import (
@@ -18,6 +20,7 @@ from fastapi import (
 )
 
 from ..base import current_user, services
+from ..base._pagination import AdminPagination
 from ._model import (
     ConnectorCallbackWrite,
     ConnectorKeyWrite,
@@ -30,6 +33,14 @@ from ._model import (
 router = APIRouter()
 
 
+@router.delete("/skills/{identifier}", status_code=204)
+async def delete_skill(
+    identifier: str, request: Request, user: User = Depends(current_user)
+) -> Response:
+    await services(request).resources.delete_skill(user, identifier)
+    return Response(status_code=204)
+
+
 def add_resource_routes():
     for path, resource_type in (
         ("skills", "skill"),
@@ -38,8 +49,27 @@ def add_resource_routes():
     ):
 
         def build_endpoints(kind):
-            async def list_resources(request: Request, user=Depends(current_user)):
+            async def list_resources(
+                request: Request,
+                catalog: bool = False,
+                cursor: str | None = None,
+                limit: int | None = Query(default=None, ge=1),
+                query: str = "",
+                category: str = "",
+                mine: bool = False,
+                user=Depends(current_user),
+            ):
                 service = services(request).resources
+                if catalog:
+                    return await service.catalog_page(
+                        user,
+                        kind,
+                        cursor=cursor,
+                        limit=limit,
+                        query=query,
+                        category=category,
+                        mine=mine,
+                    )
                 return {"items": await service.list(user, kind)}
 
             async def get_resource(
@@ -169,7 +199,7 @@ async def upload_skill(
     request: Request,
     file: UploadFile = File(...),
     category: str = Form("other"),
-    avatar: str = Form("book"),
+    avatar: str = Form(AUTO_AVATAR),
     owner_type: Literal["user", "system"] = Form("user"),
     resource_id: str | None = Form(None, max_length=128),
     user=Depends(current_user),
@@ -202,9 +232,17 @@ async def get_skill_import(job_id: str, request: Request, user=Depends(current_u
 async def retry_skill_import(job_id: str, request: Request, user=Depends(current_user)):
     return await services(request).skill_imports.retry(user, job_id)
 
-@router.get("/admin/skill-imports", response_model=SkillImportList)
-async def list_skill_import_reviews(request: Request, user=Depends(current_user)):
-    return {"items": await services(request).skill_imports.list_reviews(user)}
+@router.get(
+    "/admin/skill-imports",
+    response_model=AdminPageResult[SkillImportJob] | SkillImportList,
+)
+async def list_skill_import_reviews(
+    request: Request, page: AdminPagination, user=Depends(current_user)
+):
+    imports = services(request).skill_imports
+    if page is None:
+        return {"items": await imports.list_reviews(user)}
+    return await imports.list_reviews(user, page=page)
 
 
 @router.post("/admin/skill-imports/batch/decision")
@@ -236,6 +274,27 @@ async def download_skill(
         user, identifier, version
     )
     return _zip_download(content, identifier + ".zip")
+
+
+@router.get("/skills/{identifier}/avatar")
+async def read_skill_avatar(
+    identifier: str,
+    request: Request,
+    version: str = Query(...),
+    user=Depends(current_user),
+):
+    content = await services(request).resources.read_skill_avatar(
+        user, identifier, version
+    )
+    return Response(
+        content,
+        media_type="image/svg+xml",
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _zip_download(content, filename):
@@ -323,9 +382,13 @@ async def connector_revoke(
 
 @router.get("/admin/resources/{kind}")
 async def admin_resources(
-    kind: Literal["skill", "mcp"], request: Request, user=Depends(current_user)
+    kind: Literal["skill", "mcp"], request: Request, page: AdminPagination,
+    user=Depends(current_user),
 ):
-    return {"items": await services(request).resources.admin_list(user, kind)}
+    resources = services(request).resources
+    if page is None:
+        return {"items": await resources.admin_list(user, kind)}
+    return await resources.admin_list(user, kind, page=page)
 
 
 @router.post("/admin/resources/{kind}", status_code=201)

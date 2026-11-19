@@ -40,11 +40,17 @@ python -m egis_agentkit_app serve-files --host 127.0.0.1 --port 38093
 
 `/health/ready` 检查 PG 与 MessageBus 状态，并暴露 Nacos 连接、配置版本和重启需求。全框架读取一份 `agentkit.yaml`；更改内容必须递增 `agentkit.revision`。基础设施、认证、工作区和存储等固定装配配置变化需要重启；包含重启项的快照在旧进程中整份保留，重启后采用。
 
-数据库连接参数统一由 Nacos `agentkit.client.postgres.connection` 提供，mode 为 key 时读取 password，mode 为 cyberark 时调用 CCP REST 取密；API 与管理命令均使用同一连接池创建入口，不读取 `.env` 完整连接串。日志从 `agentkit.logging` 读取，默认 INFO/JSON 输出到标准输出；`client.tracing` 配置 Phoenix OTLP HTTP 导出，需开启 enabled。框架管理连接与关闭，埋点复用原生 TracingMiddleware。
+数据库连接参数统一由 Nacos `agentkit.client.postgres.connection` 提供，mode 为 key 时读取 password，mode 为 cyberark 时调用 CCP REST 取密；API 与管理命令均使用同一连接池创建入口，不读取 `.env` 完整连接串。日志由 `agentkit.logging` 配置，默认 INFO/JSON 输出到标准输出。填入 `directory` 绝对路径后，应用进程也会写入该目录下的 `agentkit-<主机名>-<PID>.log`。修改配置后重启服务生效。`client.tracing` 配置 Phoenix OTLP HTTP 导出，需开启 enabled。框架管理连接与关闭，埋点复用原生 TracingMiddleware。
 
 专家可以使用平台工具、Skill 和 MCP。第三方专家由 HTTP 或 WebSocket 接入，会话运行时按权限加载定义和绑定资源。
 
 系统 Skills 助手由 `init-db` 初始化并授予公司组使用权限。已建库的环境可运行 `python -m egis_agentkit_app provision-skill-assistant` 初始化此专家。用户可在助手对话中上传 ZIP 并要求安装，也可描述要复用的工作方法并要求创建个人技能。
+
+外部系统上传 Skill 的鉴权和调用示例见 [Skill 接入指南](docs/Skill接入指南.md)。
+
+技能发布时，默认用现有聊天模型根据 `SKILL.md` 的名称和简介生成简洁的 SVG 头像。生成的头像随技能版本存放在 NAS，并按技能权限读取。生成失败、图片不可读或关闭生成时，目录和详情会显示技能名首字。已有技能的预设头像继续使用。
+
+在 Nacos `agentkit.skill.avatar` 下可设置 `enabled`、`modelKey` 和 `timeoutSeconds`。`modelKey` 为空时使用 `agentkit.model.selection.defaultKey`。技能导入和手动发布共用这份配置，使用 HTTP 文件模式的部署需同步更新 NAS 文件服务。
 
 ### 公司组与 MCP
 
@@ -56,9 +62,11 @@ OAuth 环境在 Nacos 配置 `agentkit.connector.oauth.redirectUri` 为前端 HT
 
 升级已有库时，先按数据库说明执行 `upgrade-db` 预览。`upgrade-db --apply` 会停用并保留历史 MCP 记录。管理员核对服务地址后，可以用原 ID 覆盖当前配置并启用。存量连接凭据需要重新授权。
 
-沙箱配置使用 `workspace.runtime.mode: pks` 和 `workspace.runtime.sandbox`。Manager 与 Core 实现原生通用接口；当前开发适配器通过 OpenSandbox SDK 通信，公司 PKS 需注入实际沙箱 Client，配置命名不代表公司通信实现已接通。用户工作区身份固定，各项目会话保留独立 cwd 和隔离执行绑定。文件、变更和预览管理归 Project。ReMe 为默认关闭的可选能力。
+沙箱配置使用 `workspace.runtime.mode: pks` 和 `workspace.runtime.sandbox`。公司 PKS 的启动入口通过 `build_app(..., sandbox_client_factory=...)` 注入公司沙箱 Client 工厂，由 App 传给 Framework。直接运行 `serve` 时，Framework 使用开发适配器 OpenSandbox。用户工作区身份固定，各项目会话保留独立 cwd 和隔离执行绑定。文件、变更和预览管理归 Project。ReMe 为默认关闭的可选能力。
 
 验收命令、结果与边界见 [实施记录](docs/实施记录.md)。Kafka 沿用原生 drain/spawn ACK 边界，不承诺运行完成后才 ACK，也不承诺业务 exactly-once；详情见 [MessageBus 验收](../egis-agentkit-framework/docs/MessageBus验收.md)。
+
+管理列表默认每页 20 条，可通过 Nacos `agentkit.admin.pagination.defaultPageSize` 和 `maxPageSize` 设置。管理页从服务端按页取数据，回复反馈沿用游标分页。
 
 聊天与运行中引导统一走 `POST /chat/`。普通消息不传 delivery；引导传 `delivery: "steer"`，input 可为一条用户 Msg 或按顺序排列的多条用户 Msg。每条引导带稳定 ID，重复请求保持同一 ID 和内容，不会在 cluster Inbox 重复入队。响应返回 status=queued 和 message_ids；模型下一次 reasoning 前产生对应 HINT_BLOCK 事件。等待审批时不绕过确认，当前工具和模型请求不被打断。
 

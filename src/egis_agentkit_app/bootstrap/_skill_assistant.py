@@ -1,16 +1,13 @@
 """初始化系统 Skills 助手专家和公司组授权。"""
 
-from uuid import NAMESPACE_URL, uuid5
-
 from egis_agentkit.bootstrap._skill_tools import SKILL_TOOL_VERSION, SKILL_TOOLS
+from egis_agentkit.core.skill._assistant import SKILL_ASSISTANT_ID as IDENTIFIER
+from egis_agentkit.core.skill._assistant import SKILL_ASSISTANT_NAME as NAME
 from egis_agentkit.errors import Conflict, NotFound
 from egis_agentkit.service._user import UserService
 from egis_agentkit.service.access._grant import GrantService
 from egis_agentkit.service.agent._agent_manager import AgentManager
 from egis_agentkit.storage.model import AgentDefinition, Grant, User
-
-NAME = "skills-assistant"
-IDENTIFIER = uuid5(NAMESPACE_URL, f"egis-agentkit:{NAME}").hex
 
 # 创建步骤参考 OpenAI Skills 的 skill-creator，按平台的发布和工具接口改写。
 SYSTEM_PROMPT = """你是 Skills 助手，负责为当前用户安装和创建个人技能。

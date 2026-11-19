@@ -2,13 +2,16 @@
 
 import logging
 from collections.abc import Awaitable, Callable, Iterable
+from typing import Annotated, Literal
 
 from egis_agentkit.errors import AgentKitError, Forbidden
+from egis_agentkit.middleware.http._request_logging import log_http_error
 from egis_agentkit.service._user import require_admin
 from egis_agentkit.storage.model import Grant
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from ..base import current_user, services
+from ..base._pagination import AdminPagination, admin_page
 from ._model import (
     BatchFailure,
     BatchResponse,
@@ -27,7 +30,9 @@ log = logging.getLogger(__name__)
 
 
 async def _apply_batch(
-    identifiers: Iterable[str], operation: Callable[[str], Awaitable[object]]
+    request: Request,
+    identifiers: Iterable[str],
+    operation: Callable[[str], Awaitable[object]],
 ) -> BatchResponse:
     """独立提交每一项，按输入顺序返回结果。"""
     items: list[BatchResult] = []
@@ -35,13 +40,30 @@ async def _apply_batch(
         try:
             await operation(identifier)
         except AgentKitError as error:
+            log_http_error(
+                log,
+                request.scope,
+                "Batch access operation did not complete",
+                error.status_code,
+                component="_apply_batch",
+                exc=error,
+                fields={"item_id": identifier},
+            )
             items.append(
                 BatchFailure(
                     id=identifier, status_code=error.status_code, detail=str(error)
                 )
             )
-        except Exception:
-            log.exception("Batch access operation failed for %r", identifier)
+        except Exception as error:
+            log_http_error(
+                log,
+                request.scope,
+                "Batch access operation failed",
+                500,
+                component="_apply_batch",
+                exc=error,
+                fields={"item_id": identifier},
+            )
             items.append(
                 BatchFailure(id=identifier, status_code=500, detail="操作失败，请重试")
             )
@@ -70,6 +92,7 @@ async def request_skill_shares(
         raise Forbidden()
     sharing = services(request).sharing
     return await _apply_batch(
+        request,
         body.resource_ids,
         lambda identifier: sharing.submit(
             user, "skill", identifier, target=body.target
@@ -78,8 +101,19 @@ async def request_skill_shares(
 
 
 @router.get("/share-recipients")
-async def share_recipients(request: Request, user=Depends(current_user)):
-    return {"items": await services(request).sharing.recipients(user)}
+async def share_recipients(
+    request: Request,
+    page: AdminPagination,
+    principal_type: Literal["user", "group"] | None = None,
+    q: Annotated[str, Query(max_length=128)] = "",
+    user=Depends(current_user),
+):
+    sharing = services(request).sharing
+    if principal_type is None:
+        return {"items": await sharing.recipients(user)}
+    return await sharing.recipients_page(
+        user, principal_type, q, page or admin_page(request, page=1)
+    )
 
 
 @router.get("/share-requests")
@@ -88,8 +122,11 @@ async def list_shares(request: Request, user=Depends(current_user)):
 
 
 @router.get("/admin/grants")
-async def grants(request: Request, user=Depends(current_user)):
-    return {"items": await services(request).grants.list_grants(user)}
+async def grants(request: Request, page: AdminPagination, user=Depends(current_user)):
+    service = services(request).grants
+    if page is not None:
+        return await service.list_grants_page(user, page)
+    return {"items": await service.list_grants(user)}
 
 
 @router.get("/admin/grant-resources")
@@ -125,7 +162,7 @@ async def grant_system_skills(
             ),
         )
 
-    return await _apply_batch(owners, grant_skill)
+    return await _apply_batch(request, owners, grant_skill)
 
 
 @router.delete("/admin/grants/{identifier}", status_code=204)
@@ -135,8 +172,13 @@ async def revoke_grant(identifier: str, request: Request, user=Depends(current_u
 
 
 @router.get("/admin/share-reviews")
-async def share_reviews(request: Request, user=Depends(current_user)):
-    return {"items": await services(request).sharing.list(user, admin=True)}
+async def share_reviews(
+    request: Request, page: AdminPagination, user=Depends(current_user)
+):
+    service = services(request).sharing
+    if page is not None:
+        return await service.list_reviews_page(user, page)
+    return {"items": await service.list(user, admin=True)}
 
 
 @router.post("/admin/share-reviews/batch/decision")
@@ -146,6 +188,7 @@ async def decide_shares(
     require_admin(user)
     sharing = services(request).sharing
     return await _apply_batch(
+        request,
         body.review_ids,
         lambda identifier: sharing.decide(
             user, identifier, body.is_approved, body.reason

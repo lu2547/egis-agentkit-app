@@ -16,5 +16,7 @@ dist/
 .worktrees/
 .vscode/
 
-# Local documentation is maintained outside version control.
-/docs/
+# Keep local notes and verification artifacts out of version control.
+/docs/*
+!/docs/数据库表清单.md
+!/docs/Skill接入指南.md

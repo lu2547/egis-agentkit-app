@@ -5,11 +5,14 @@ from egis_agentkit.storage.model import Group, User
 from fastapi import APIRouter, Depends, Request, Response
 
 from ..base import current_user, services
+from ..base._pagination import AdminPagination
 from ._model import (
+    GroupCreate,
     PreferencesWrite,
     VirtualUserAccount,
     VirtualUserCredential,
     VirtualUserList,
+    VirtualUserPage,
     VirtualUserStatus,
     VirtualUserWrite,
 )
@@ -17,9 +20,13 @@ from ._model import (
 router = APIRouter()
 
 
-@router.get("/admin/virtual-users", response_model=VirtualUserList)
-async def virtual_users(request: Request, user=Depends(current_user)):
+@router.get("/admin/virtual-users", response_model=VirtualUserPage | VirtualUserList)
+async def virtual_users(
+    request: Request, page: AdminPagination, user=Depends(current_user)
+):
     accounts = services(request).virtual_users
+    if page is not None:
+        return await accounts.list_page(user, page)
     return {"items": await accounts.list(user)}
 
 
@@ -74,8 +81,16 @@ async def save_preferences(
 
 
 @router.get("/admin/users")
-async def users(request: Request, user=Depends(current_user)):
-    return {"items": await services(request).users.list_users(user)}
+async def users(
+    request: Request,
+    page: AdminPagination,
+    user=Depends(current_user),
+    group_id: str | None = None,
+):
+    service = services(request).users
+    if page is not None:
+        return await service.list_users_page(user, page, group_id=group_id)
+    return {"items": await service.list_users(user)}
 
 
 @router.put("/admin/users/{user_id}")
@@ -88,18 +103,31 @@ async def update_user(
 
 
 @router.get("/admin/groups")
-async def groups(request: Request, user=Depends(current_user)):
-    return {"items": await services(request).users.list_groups(user)}
-
-
-@router.post("/admin/groups")
-@router.put("/admin/groups/{group_id}")
-async def save_group(
-    body: Group,
+async def groups(
     request: Request,
-    group_id: str | None = None,
+    page: AdminPagination,
+    include_members: bool = True,
     user=Depends(current_user),
 ):
-    if group_id is not None and group_id != body.group_id:
+    service = services(request).users
+    if page is not None:
+        return await service.list_groups_page(user, page)
+    return {"items": await service.list_groups(user, include_members=include_members)}
+
+
+@router.post("/admin/groups", status_code=201)
+async def create_group(
+    body: GroupCreate, request: Request, user=Depends(current_user)
+):
+    return await services(request).users.create_group(
+        user, body.group_name, is_enabled=body.is_enabled
+    )
+
+
+@router.put("/admin/groups/{group_id}")
+async def update_group(
+    group_id: str, body: Group, request: Request, user=Depends(current_user)
+):
+    if group_id != body.group_id:
         raise Forbidden("分组标识不可修改")
-    return await services(request).users.save_group(user, body)
+    return await services(request).users.update_group(user, body)

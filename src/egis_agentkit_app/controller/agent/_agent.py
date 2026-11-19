@@ -15,9 +15,19 @@ from egis_agentkit.storage.model import (
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
 
 from ..base import current_user, saved_definition, services
+from ..base._pagination import AdminPagination, admin_page
 from ._model import AgentWrite
 
 router = APIRouter()
+
+
+@router.get("/admin/remote-agents")
+async def list_remote_agents(
+    request: Request, page: AdminPagination, user: User = Depends(current_user)
+) -> dict[str, Any]:
+    return await services(request).agents.page_remote_definitions(
+        user, page or admin_page(request, page=1)
+    )
 
 
 @router.get("/assistant")
@@ -41,10 +51,20 @@ async def page_agents(
     cursor: str | None = None,
     limit: int | None = None,
     query: str = "",
+    catalog: bool = False,
+    category: str = "",
+    mine: bool = False,
     user: User = Depends(current_user),
 ) -> dict[str, Any]:
     return await services(request).agents.page_definitions(
-        user, types=types or CATALOG_TYPES, cursor=cursor, limit=limit, query=query
+        user,
+        types=types or CATALOG_TYPES,
+        cursor=cursor,
+        limit=limit,
+        query=query,
+        catalog=catalog,
+        category=category,
+        mine=mine,
     )
 
 
