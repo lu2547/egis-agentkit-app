@@ -100,7 +100,7 @@ async def get_runtime_options(request: Request, user=Depends(current_user)):
             for value, label, description in modes
         ],
         "default_permission_mode": tasks.get_default_permission_mode().value,
-        "steering": tasks.steering.settings().model_dump(mode="json"),
+        "steering": tasks.get_steering_settings().model_dump(mode="json"),
     }
 
 

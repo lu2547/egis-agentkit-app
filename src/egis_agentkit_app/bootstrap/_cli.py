@@ -16,7 +16,6 @@ from egis_agentkit.client.nacos import (
 from egis_agentkit.client.nacos._settings import LoggingConfig
 from egis_agentkit.errors import AgentKitError
 
-DATABASE_COMMANDS = {"cleanup-db", "upgrade-db", "reset-skills"}
 logger = logging.getLogger(__name__)
 
 
@@ -69,39 +68,19 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=[
-            "serve",
-            "serve-files",
-            "init-db",
-            "seed",
-            "provision-admin",
-            "provision-skill-assistant",
-            "cleanup-db",
-            "upgrade-db",
-            "reset-skills",
-        ],
+        choices=["serve", "serve-files", "provision-admin"],
         default="serve",
         nargs="?",
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int)
-    parser.add_argument(
-        "--apply", action="store_true", help="应用升级或清理，默认只预览"
-    )
-    parser.add_argument("--database", help="预期连接的数据库名")
     parser.add_argument("--user-id", help="已登录并登记的平台用户 ID")
     args = parser.parse_args()
-    if args.command not in DATABASE_COMMANDS and (
-        args.apply or args.database is not None
-    ):
-        parser.error("--apply 和 --database 仅用于数据库维护命令")
-    if args.apply and not args.database:
-        parser.error("执行升级或清理时必须指定 --database")
-    if args.command in {"seed", "provision-admin"}:
+    if args.command == "provision-admin":
         if not args.user_id:
-            parser.error("seed 和 provision-admin 必须指定 --user-id")
+            parser.error("provision-admin 必须指定 --user-id")
     elif args.user_id is not None:
-        parser.error("--user-id 仅用于 seed 和 provision-admin")
+        parser.error("--user-id 仅用于 provision-admin")
     port = args.port
     if port is None:
         port = 38093 if args.command == "serve-files" else 38092
@@ -121,22 +100,11 @@ def main():
             logger.exception("AgentKit file server failed to start")
             parser.exit(1)
     else:
-        from ._provision import provision
+        from ._provision import provision_admin
 
         try:
-            asyncio.run(
-                provision(
-                    args.command,
-                    database=args.database,
-                    apply=args.apply,
-                    user_id=args.user_id,
-                )
-            )
+            asyncio.run(provision_admin(args.user_id))
         except AgentKitError as exc:
-            parser.exit(1, f"{exc}\n")
-        except ValueError as exc:
-            if args.command not in DATABASE_COMMANDS:
-                raise
             parser.exit(1, f"{exc}\n")
 
 

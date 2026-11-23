@@ -1,4 +1,4 @@
-"""技能和连接器发布管理，以及工具目录的只读接口。"""
+"""技能和连接器发布管理，以及个人助理可选工具配置。"""
 
 from typing import Literal
 from urllib.parse import quote
@@ -172,26 +172,33 @@ def add_resource_routes():
                 methods=["GET"],
                 name=f"versions_{path}",
             )
-        if resource_type != "tool":
-            router.add_api_route(
-                f"/{path}/{{identifier}}/install",
-                add_installation,
-                methods=["POST"],
-                name=f"install_{path}",
-            )
-            router.add_api_route(
-                f"/{path}/{{identifier}}/installation",
-                update_installation,
-                methods=["PATCH"],
-                name=f"toggle_{path}",
-            )
-            router.add_api_route(
-                f"/{path}/{{identifier}}/installation",
-                remove_installation,
-                methods=["DELETE"],
-                status_code=204,
-                name=f"remove_{path}_installation",
-            )
+        router.add_api_route(
+            f"/{path}/{{identifier}}/install",
+            add_installation,
+            methods=["POST"],
+            name=f"install_{path}",
+        )
+        router.add_api_route(
+            f"/{path}/{{identifier}}/installation",
+            update_installation,
+            methods=["PATCH"],
+            name=f"toggle_{path}",
+        )
+        router.add_api_route(
+            f"/{path}/{{identifier}}/installation",
+            remove_installation,
+            methods=["DELETE"],
+            status_code=204,
+            name=f"remove_{path}_installation",
+        )
+
+
+async def _site_skill_import_user(
+    request: Request, user: User = Depends(current_user)
+) -> User:
+    if getattr(request.state, "egis_virtual_user", False):
+        raise HTTPException(403, "站内技能导入仅接受站内账号")
+    return user
 
 
 @router.post("/skills/imports", status_code=202, response_model=SkillImportJob)
@@ -202,7 +209,7 @@ async def upload_skill(
     avatar: str = Form(AUTO_AVATAR),
     owner_type: Literal["user", "system"] = Form("user"),
     resource_id: str | None = Form(None, max_length=128),
-    user=Depends(current_user),
+    user: User = Depends(_site_skill_import_user),
 ):
     return await services(request).skill_imports.enqueue(
         user,
@@ -211,26 +218,32 @@ async def upload_skill(
         category=category,
         avatar=avatar,
         owner_type=owner_type,
-        virtual=getattr(request.state, "egis_virtual_user", False),
         resource_id=resource_id,
     )
 
 
 @router.get("/skills/imports", response_model=SkillImportList)
-async def list_skill_imports(request: Request, user=Depends(current_user)):
+async def list_skill_imports(
+    request: Request, user: User = Depends(_site_skill_import_user)
+):
     return {"items": await services(request).skill_imports.list(user)}
 
 
 @router.get("/skills/imports/{job_id}", response_model=SkillImportJob)
-async def get_skill_import(job_id: str, request: Request, user=Depends(current_user)):
+async def get_skill_import(
+    job_id: str, request: Request, user: User = Depends(_site_skill_import_user)
+):
     return await services(request).skill_imports.get(user, job_id)
 
 
 @router.post(
     "/skills/imports/{job_id}/retry", status_code=202, response_model=SkillImportJob
 )
-async def retry_skill_import(job_id: str, request: Request, user=Depends(current_user)):
+async def retry_skill_import(
+    job_id: str, request: Request, user: User = Depends(_site_skill_import_user)
+):
     return await services(request).skill_imports.retry(user, job_id)
+
 
 @router.get(
     "/admin/skill-imports",

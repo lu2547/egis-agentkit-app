@@ -11,6 +11,7 @@ from egis_agentkit.bootstrap import init_agentkit
 from egis_agentkit.client.identity import JWTIdentity
 from egis_agentkit.client.nacos import NacosClient, NacosConfigProvider
 from egis_agentkit.client.sandbox import SandboxClient
+from egis_agentkit.core.agent._runtime import AgentKitAgent
 from egis_agentkit.middleware.http._http_identity_middleware_impl import IdentityGuard
 from egis_agentkit.middleware.http._request_logging import RequestLogging
 from egis_agentkit.middleware.http._stream_ready_middleware_impl import StreamReady
@@ -56,6 +57,7 @@ async def build_app(
         mcp_hubs=[kit.mcp_hub],
         extra_agent_tools=kit.tools,
         extra_agent_middlewares=kit.middlewares,
+        custom_agent_cls=AgentKitAgent,
         download_secret=download_secret,
         enable_scheduler=False,
         enable_channel_worker=False,

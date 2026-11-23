@@ -9,6 +9,7 @@ from ..controller import (
     model,
     project,
     resource,
+    schedule,
     session,
     team,
     user,
@@ -16,6 +17,9 @@ from ..controller import (
 from ..controller.chat import router as chat_router
 from ..controller.health import router as health_router
 from ..controller.remote_agent import router as remote_agent_router
+from ..controller.resource._external_skill_import import (
+    router as external_skill_import_router,
+)
 
 manager_router = APIRouter(prefix="/manager", tags=["manager"])
 
@@ -27,6 +31,7 @@ for controller in (
     session,
     project,
     resource,
+    schedule,
     user,
     composer,
 ):
@@ -36,6 +41,7 @@ for controller in (
 router = APIRouter()
 for component in (
     manager_router,
+    external_skill_import_router,
     health_router,
     remote_agent_router,
     chat_router,

@@ -6,17 +6,17 @@
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| POST | `/manager/skills/imports` | 上传 ZIP，返回 HTTP 202 和 `job_id` |
-| GET | `/manager/skills/imports/{job_id}` | 查询指定任务 |
-| GET | `/manager/skills/imports` | 查询本人提交的任务，返回 `items` |
-| POST | `/manager/skills/imports/{job_id}/retry` | 重试 `failed` 任务，无需重新上传 ZIP，返回 HTTP 202 |
+| POST | `/integrations/skills/imports` | 上传 ZIP，返回 HTTP 202 和 `job_id` |
+| GET | `/integrations/skills/imports/{job_id}` | 查询指定任务 |
+| GET | `/integrations/skills/imports` | 查询该虚拟账号提交的任务，返回 `items` |
+| POST | `/integrations/skills/imports/{job_id}/retry` | 重试 `failed` 任务，无需重新上传 ZIP，返回 HTTP 202 |
 
 ## 上传示例
 
-上传使用 `multipart/form-data`。必传 `file`，可选 `category`。ZIP 内必须有一份 `SKILL.md`，在文件开头的 YAML 中填写 `version` 或 `metadata.version`，例如 `1.0.0`。虚拟用户提交的包归属为系统技能。
+上传使用 `multipart/form-data`。必传 `file`，可选 `category`。ZIP 内必须有一份 `SKILL.md`，文件开头的 YAML 可填写 `version` 或 `metadata.version`，省略时使用 `1.0.0`。虚拟用户提交的包归属为系统技能。
 
 ```bash
-curl -fsS -X POST "$BASE_URL/manager/skills/imports" \
+curl -fsS -X POST "$BASE_URL/integrations/skills/imports" \
   -H "Authorization: Bearer $SKILL_TOKEN" \
   -F 'file=@daily-report.zip;type=application/zip' \
   -F 'category=办公协同'
@@ -37,13 +37,13 @@ curl -fsS -X POST "$BASE_URL/manager/skills/imports" \
 
 ```bash
 # JOB_ID 取上传响应的 job_id。
-curl -fsS "$BASE_URL/manager/skills/imports/$JOB_ID" \
+curl -fsS "$BASE_URL/integrations/skills/imports/$JOB_ID" \
   -H "Authorization: Bearer $SKILL_TOKEN"
 
-curl -fsS "$BASE_URL/manager/skills/imports" \
+curl -fsS "$BASE_URL/integrations/skills/imports" \
   -H "Authorization: Bearer $SKILL_TOKEN"
 
-curl -fsS -X POST "$BASE_URL/manager/skills/imports/$JOB_ID/retry" \
+curl -fsS -X POST "$BASE_URL/integrations/skills/imports/$JOB_ID/retry" \
   -H "Authorization: Bearer $SKILL_TOKEN"
 ```
 
