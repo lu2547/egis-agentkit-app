@@ -9,7 +9,7 @@ WorkBuddy 启动与 HTTP 组合应用。首版已实现，前端在相邻的 `eg
 - 主应用直接用原生 create_app，保留其 lifespan；由 bootstrap 挂载领域 Controller 和统一身份/接口策略。
 - 共享规则在 framework：User/Group、当前 Definition、私有自用、共享审核、USE、资源按需加载。
 - 只有 user/admin；系统注册默认无 USE；私有轻量资源保存自用无审核，只有共享审核。
-- PG 使用平台提供的数据库；standalone 委托原生 InMemoryMessageBus，cluster 使用 Kafka 唤醒与广播、PG 状态与租约，不依赖 Redis。
+- PG 保存会话状态及 NAS 日志的提交位置。standalone 使用原生内存总线。cluster 继续使用 Kafka 唤醒与广播、PG 待处理队列与租约，并将会话事件回放保存在 Redis Streams。
 - 独立前端为 egis-agentkit-frontend，业务 Demo 在 demo/agentscope-demo/agentkit_demo。
 
 完成首次初始化并由运行平台注入应用配置和密钥后，使用应用 Python 环境启动：
@@ -28,11 +28,11 @@ uv run python -m egis_agentkit_app serve
 uv run python -m egis_agentkit_app serve-files --host 127.0.0.1 --port 38093
 ```
 
-跨主机部署时，由内网 HTTPS 代理转发到文件服务，或通过 `--host` 绑定受控的内网地址。文件服务启动时读取 Nacos 配置，文件访问设置或存储限额变更后需重启。该进程只提供受管 NAS 文件接口，PG、Kafka 和沙箱生命周期由现有 Agent 服务负责。
+跨主机部署时，由内网 HTTPS 代理转发到文件服务，或通过 `--host` 绑定受控的内网地址。文件服务启动时读取 Nacos 配置，文件访问设置或存储限额变更后需重启。HTTP 模式先部署与 API 同版本的文件服务，再启动 API/Worker。文件服务提供受管 NAS 访问，完整会话消息写入 `{workspace.runtime.root}/user/{uid}/session/history/{sid}/messages.jsonl`。PG、Kafka、Redis 及沙箱由 Agent 服务连接。
 
 ### 应用初始化
 
-企业首次建表由部署流程或 DBA 执行 [pg.sql](../egis-agentkit-framework/scripts/init/pg.sql)，Kafka Topic 和 NAS 等资源按[初始化脚本说明](../egis-agentkit-framework/scripts/init/README.md)准备。数据库变更、清理和资源预置由部署脚本负责。
+企业首次建表由部署流程或 DBA 执行 [pg.sql](../egis-agentkit-framework/scripts/init/pg.sql)，Kafka Topic、NAS 和 Redis 回放库等资源按[初始化脚本说明](../egis-agentkit-framework/scripts/init/README.md)准备。数据库变更、清理和资源预置由部署脚本负责。
 
 应用 CLI 仅保留 `serve`、`serve-files` 和 `provision-admin`。首位管理员先完成登录登记，再由部署人员在本目录执行：
 
@@ -76,6 +76,6 @@ OAuth 环境在 Nacos 配置 `agentkit.connector.oauth.redirectUri` 为前端 HT
 
 聊天消息统一通过 `POST /chat/` 进入 AgentScope 原生 FIFO，返回 `status: "queued"` 和 `queue_item_id`。运行中补充也先排队，不传自研 delivery 字段。点击引导时，用 `POST /chat/queue/{item_id}/steer` 携带 `agent_id`、`session_id` 和当前 `reply_id`；注入发生在模型推理边界，不打断当前工具或模型请求。
 
-通过 `GET /chat/queue` 读取队列，`PATCH /chat/queue/order` 排序，`PATCH/DELETE /chat/queue/{item_id}` 编辑或删除未消费项。所有入口均校验身份、会话、项目和资源权限。集群模式保存于 PostgreSQL MessageBus，单机内存模式不跨服务重启保留队列。
+通过 `GET /chat/queue` 读取队列，`PATCH /chat/queue/order` 排序，`PATCH/DELETE /chat/queue/{item_id}` 编辑或删除未消费项。所有入口均校验身份、会话、项目和资源权限。集群模式的待发输入保存在 PostgreSQL，由原有 Kafka 唤醒链路触发消费。Redis Streams 提供会话事件回放，保留期由 `agentkit.client.redis.retentionSeconds` 设置。单机内存模式的队列在服务重启时清空。
 
 限制沿用 Nacos `agentkit.session.steering`；`/manager/runtime-options` 提供输入区限额。1.0.3 还增加 `/manager/schedules`、`/manager/schedule-runs` 定时任务与运行记录接口。完整发布说明和执行脚本见 [1.0.3 发布](../egis-agentkit-framework/scripts/releases/1.0.3/README.md)。

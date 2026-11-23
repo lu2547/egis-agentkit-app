@@ -3,20 +3,34 @@
 import asyncio
 import json
 import os
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 import httpx
-from agentscope.app.message_bus import MessageBusKeys
+from agentscope.app.message_bus import MessageBusKeys, RedisMessageBus
 from dotenv import load_dotenv
 from egis_agentkit.client._postgres import (
     create_postgres_engine_from_config,
     postgres_url,
 )
 from egis_agentkit.client.nacos import NacosClient, NacosConfigProvider, nacos_bootstrap
-from egis_agentkit.core.message_bus import EgisMessageBus
 from egis_agentkit.storage import AgentKitStorage
 
 APP = Path(__file__).resolve().parents[1]
+
+
+async def collect_events(replay, sid, streams):
+    """Keep the verification reader's own cursor, including across checkpoint trims."""
+    stream = streams.setdefault(sid, [])
+    while True:
+        page = await replay.log_read(
+            MessageBusKeys.session_events(sid),
+            since=stream[-1][0] if stream else None,
+            max_count=500,
+        )
+        stream.extend(page)
+        if len(page) < 500:
+            return [event for _, event in stream]
 
 
 async def main():
@@ -25,12 +39,29 @@ async def main():
         config = NacosConfigProvider(nacos)
         await config.refresh()
         postgres = config.snapshot.client.postgres
+        redis = config.snapshot.client.redis
     engine = create_postgres_engine_from_config(postgres)
     storage = AgentKitStorage(postgres_url(postgres), engine)
-    # Replay reads use only PG; this acceptance reader never enters a Kafka
-    # group or competes with the application's Dispatcher for a trigger.
-    replay = EgisMessageBus(deployment_mode="cluster", engine=engine)
-    try:
+    async with AsyncExitStack() as stack:
+        stack.push_async_callback(engine.dispose)
+        # This verifier only reads Redis Streams. The running application's
+        # Kafka consumer group remains the sole consumer of TeamSay triggers.
+        replay = await stack.enter_async_context(
+            RedisMessageBus(
+                host=redis.host,
+                port=redis.port,
+                db=redis.db,
+                password=os.environ[redis.password_env] if redis.password_env else None,
+                max_connections=redis.max_connections,
+                socket_timeout=redis.socket_timeout_seconds,
+                socket_connect_timeout=redis.connect_timeout_seconds,
+            )
+        )
+        if not await replay.get_client().ping():
+            raise RuntimeError(
+                "Redis replay verification failed before starting a task"
+            )
+        streams = {}
         async with httpx.AsyncClient(
             base_url="http://127.0.0.1:38092", timeout=180
         ) as client:
@@ -87,22 +118,13 @@ async def main():
             print("Real Team task:", task["session_id"], flush=True)
             async with asyncio.timeout(180):
                 while True:
-                    leader = [
-                        payload
-                        for _, payload in await replay.log_read(
-                            MessageBusKeys.session_events(task["session_id"]),
-                            max_count=1000,
+                    leader = await collect_events(replay, task["session_id"], streams)
+                    workers = {
+                        member.session_id: await collect_events(
+                            replay, member.session_id, streams
                         )
-                    ]
-                    workers = {}
-                    for member in team.data.members:
-                        workers[member.session_id] = [
-                            payload
-                            for _, payload in await replay.log_read(
-                                MessageBusKeys.session_events(member.session_id),
-                                max_count=1000,
-                            )
-                        ]
+                        for member in team.data.members
+                    }
                     ends = [
                         event
                         for event in leader
@@ -174,8 +196,6 @@ async def main():
                 json.dumps(summary, ensure_ascii=False, indent=2)
             )
             print("Real Team round trip passed", flush=True)
-    finally:
-        await engine.dispose()
 
 
 if __name__ == "__main__":
