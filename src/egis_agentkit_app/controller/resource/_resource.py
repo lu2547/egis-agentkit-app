@@ -3,8 +3,9 @@
 from typing import Literal
 from urllib.parse import quote
 
+from egis_agentkit.client.nacos._settings import AdminPaginationConfig
 from egis_agentkit.core.skill._avatar import AUTO_AVATAR
-from egis_agentkit.service._admin_page import AdminPageResult
+from egis_agentkit.service._admin_page import AdminPage, AdminPageResult
 from egis_agentkit.service._user import require_admin
 from egis_agentkit.storage.model import User
 from fastapi import (
@@ -57,10 +58,14 @@ def add_resource_routes():
                 query: str = "",
                 category: str = "",
                 mine: bool = False,
+                resource_ids: list[str] | None = Query(default=None, max_length=100),
+                runtime_names: list[str] | None = Query(default=None, max_length=100),
+                owner_type: Literal["system"] | None = None,
+                purpose: Literal["grant"] | None = None,
                 user=Depends(current_user),
             ):
                 service = services(request).resources
-                if catalog:
+                if catalog or kind == "skill":
                     return await service.catalog_page(
                         user,
                         kind,
@@ -69,6 +74,10 @@ def add_resource_routes():
                         query=query,
                         category=category,
                         mine=mine,
+                        resource_ids=resource_ids,
+                        owner_type=owner_type,
+                        purpose=purpose,
+                        runtime_names=runtime_names,
                     )
                 return {"items": await service.list(user, kind)}
 
@@ -122,8 +131,14 @@ def add_resource_routes():
                 return Response(status_code=204)
 
             async def list_versions(
-                identifier: str, request: Request, user=Depends(current_user)
+                identifier: str, request: Request, user=Depends(current_user),
+                cursor: str | None = None, limit: int | None = Query(default=None, ge=1),
+                query: str = "",
             ):
+                if kind == "skill":
+                    return await services(request).resources.skill_versions_page(
+                        user, identifier, cursor=cursor, limit=limit, query=query
+                    )
                 return {
                     "items": await services(request).resources.list_asset_versions(
                         user, kind, identifier
@@ -396,12 +411,16 @@ async def connector_revoke(
 @router.get("/admin/resources/{kind}")
 async def admin_resources(
     kind: Literal["skill", "mcp"], request: Request, page: AdminPagination,
-    user=Depends(current_user),
+    user=Depends(current_user), query: str = "",
 ):
     resources = services(request).resources
+    if page is None and kind == "skill":
+        config = getattr(request.app.state, "egis_config", None)
+        settings = config.snapshot.admin.pagination if config is not None else AdminPaginationConfig()
+        page = AdminPage(number=1, size=settings.default_page_size)
     if page is None:
         return {"items": await resources.admin_list(user, kind)}
-    return await resources.admin_list(user, kind, page=page)
+    return await resources.admin_list(user, kind, page=page, query=query)
 
 
 @router.post("/admin/resources/{kind}", status_code=201)

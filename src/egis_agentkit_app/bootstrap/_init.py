@@ -20,6 +20,7 @@ from fastapi.middleware import Middleware
 from .. import __version__
 from ..controller.base import native_user_id, register_exception_handlers
 from ._router import router
+from ._skill_assistant import provision_skill_assistant
 
 
 async def build_app(
@@ -90,6 +91,9 @@ async def build_app(
     @asynccontextmanager
     async def lifespan(application):
         async with kit.lifespan(native_lifespan(application)):
+            await provision_skill_assistant(
+                services.users.storage, config, services.users.policies
+            )
             yield
 
     app.router.lifespan_context = lifespan

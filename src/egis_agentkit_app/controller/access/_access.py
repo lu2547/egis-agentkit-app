@@ -4,7 +4,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Annotated, Literal
 
-from egis_agentkit.errors import AgentKitError, Forbidden
+from egis_agentkit.errors import AgentKitError, Forbidden, InvalidRequest
 from egis_agentkit.middleware.http._request_logging import log_http_error
 from egis_agentkit.service._user import require_admin
 from egis_agentkit.storage.model import Grant
@@ -121,6 +121,12 @@ async def list_shares(request: Request, user=Depends(current_user)):
     return {"items": await services(request).sharing.list(user)}
 
 
+@router.delete("/share-requests/{identifier}", status_code=204)
+async def withdraw_share(identifier: str, request: Request, user=Depends(current_user)):
+    await services(request).sharing.withdraw(user, identifier)
+    return Response(status_code=204)
+
+
 @router.get("/admin/grants")
 async def grants(request: Request, page: AdminPagination, user=Depends(current_user)):
     service = services(request).grants
@@ -130,8 +136,15 @@ async def grants(request: Request, page: AdminPagination, user=Depends(current_u
 
 
 @router.get("/admin/grant-resources")
-async def grant_resources(request: Request, user=Depends(current_user)):
-    return {"items": await services(request).grants.grantable_resources(user)}
+async def grant_resources(
+    request: Request, include_skills: bool = False, user=Depends(current_user)
+):
+    require_admin(user)
+    if include_skills:
+        raise InvalidRequest("技能授权请选择分页技能目录")
+    return {"items": await services(request).grants.grantable_resources(
+        user, include_skills=include_skills
+    )}
 
 
 @router.post("/admin/grants")

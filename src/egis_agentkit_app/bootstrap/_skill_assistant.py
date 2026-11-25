@@ -8,6 +8,7 @@ from egis_agentkit.service._user import UserService
 from egis_agentkit.service.access._grant import GrantService
 from egis_agentkit.service.agent._agent_manager import AgentManager
 from egis_agentkit.storage.model import AgentDefinition, Grant, User
+from egis_agentkit.storage.model.agent._update import AgentUpdate
 
 # 创建步骤参考 OpenAI Skills 的 skill-creator，按平台的发布和工具接口改写。
 SYSTEM_PROMPT = """你是 Skills 助手，负责为当前用户安装和创建个人技能。
@@ -69,6 +70,32 @@ async def provision_skill_assistant(storage, config, policies):
             or definition["agent_name"] != NAME
         ):
             raise Conflict("Skills 助手的定义身份已被占用")
+        required = {
+            tool.name: {
+                "resource_type": "tool", "resource_id": tool.name,
+                "resource_version": SKILL_TOOL_VERSION,
+            }
+            for tool in SKILL_TOOLS
+        }
+        bindings = definition["payload"].get("bindings", [])
+        repaired = [
+            ref for ref in bindings
+            if (ref.get("resource_type"), ref.get("resource_id"))
+            not in {("tool", identifier) for identifier in required}
+        ] + list(required.values())
+        if any(not any(
+            all(ref.get(key) == value for key, value in required_ref.items())
+            and ref.get("resource_view_type", "system") == "system"
+            for ref in bindings
+        ) for required_ref in required.values()):
+            definition = await AgentManager(
+                write, policies, config_provider=config
+            ).update_definition(actor, IDENTIFIER, AgentUpdate(
+                agent_name=definition["agent_name"],
+                agent_display_name=definition["agent_display_name"],
+                payload={**definition["payload"], "bindings": repaired},
+                owner_version=definition["owner_version"],
+            ))
         company = UserService(storage, policies).company_group()
         await write.users.ensure_group(company, actor=actor.user_id)
         await GrantService(write, policies).grant(
