@@ -209,6 +209,25 @@ async def decide_shares(
     )
 
 
+@router.get("/admin/share-reviews/{identifier}/skills/{skill_id}/download")
+async def download_review_skill(
+    identifier: str, skill_id: str, request: Request,
+    version: str = Query(..., min_length=1, max_length=128), user=Depends(current_user),
+):
+    from urllib.parse import quote
+
+    content = await services(request).sharing.skill_archive(user, identifier, skill_id, version)
+    filename = quote(f"{skill_id}-{version}.zip", safe="")
+    return Response(content=content, media_type="application/zip", headers={
+        "Content-Disposition": "attachment; filename*=UTF-8''" + filename,
+    })
+
+
+@router.get("/admin/share-reviews/{identifier}")
+async def share_review_content(identifier: str, request: Request, user=Depends(current_user)):
+    return await services(request).sharing.detail(user, identifier)
+
+
 @router.post("/admin/share-reviews/{identifier}/decision")
 async def decide_share(
     identifier: str, body: DecisionWrite, request: Request, user=Depends(current_user)

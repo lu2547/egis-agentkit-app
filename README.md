@@ -70,7 +70,11 @@ uv run python -m egis_agentkit_app provision-admin --user-id 用户ID
 
 管理员在「管理 → MCP 维护」登记、编辑和启停连接器。每个 ID 维护一条当前配置，启用后通过公司组在连接器广场可见。OAuth 连接器先由用户完成授权，再添加到个人助理。取消添加会保留授权。服务地址或认证配置变化后，用户需要重新授权。
 
-OAuth 环境在 Nacos 配置 `agentkit.connector.oauth.redirectUri` 为前端 HTTPS 地址（路径 `/connectors/oauth/callback`），并按 `credentialKeyEnv` 注入凭据加密密钥。连接配置和授权存 PostgreSQL，会话开始时按当前权限装配到沙箱网关。
+OAuth 环境在 Nacos 配置 `agentkit.connector.oauth.redirectUri` 为前端回调地址，路径为 `/connectors/oauth/callback`；也可通过 `redirectUriEnv` 指定环境变量，默认引用 `AGENTKIT_MCP_OAUTH_REDIRECT_URI`。显式 `redirectUri` 优先；已有配置若写了 `redirectUriEnv: null`，使用环境变量前需改为上述变量名。按 `credentialKeyEnv`（默认 `AGENTKIT_MCP_CREDENTIAL_KEY`）向 API 进程注入持久的 Fernet 凭据加密密钥，各节点使用同一密钥。连接配置和授权存 PostgreSQL，会话开始时按当前权限装配到沙箱网关。
+
+回调地址的协议、主机和端口必须与发起授权的浏览器页面一致，待完成请求保存在该源的浏览器会话存储中。正式部署使用实际前端域名的 HTTPS 地址。本机开发允许显式配置 `http://localhost:5179/connectors/oauth/callback`，适用于从 `http://localhost:5179` 发起授权；若浏览器使用 `127.0.0.1`、IPv6 回环地址或其他端口，应相应修改。HTTP 仅允许 `localhost` 或数字回环 IP，不会根据请求 Host 自动推断回调；MCP 服务和授权服务器端点仍要求 HTTPS。此限制遵循 [MCP 授权规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#communication-security) 的本机回调例外。
+
+连接器表单中的客户端 ID 与上述平台回调配置分别维护。客户端 ID 留空时，仅在服务商声明动态注册端点时自动注册；否则需在服务商预先注册公共客户端，并填写其客户端 ID 和同一个回调地址。授权提示缺少加密密钥或回调地址时，由部署管理员补充平台配置。
 
 沙箱配置使用 `workspace.runtime.mode: pks` 和 `workspace.runtime.sandbox`。公司 PKS 的启动入口通过 `build_app(..., sandbox_client_factory=...)` 注入公司沙箱 Client 工厂，由 App 传给 Framework。直接运行 `serve` 时，Framework 使用开发适配器 OpenSandbox。用户工作区身份固定，各项目会话保留独立 cwd 和隔离执行绑定。文件、变更和预览管理归 Project。ReMe 为默认关闭的可选能力。
 

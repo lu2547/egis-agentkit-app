@@ -1,5 +1,6 @@
 """Native session task management and reply artifact HTTP endpoints."""
 
+from egis_agentkit.service.session._execution_phase import get_execution_phase
 from egis_agentkit.service.team._collaboration import TeamCollaborationService
 from fastapi import APIRouter, Depends, Request, Response
 
@@ -153,6 +154,7 @@ async def rename_task(
 @router.get("/tasks/{sid}")
 async def get_task(sid: str, request: Request, user=Depends(current_user)):
     task = await services(request).sessions.get_session(user, sid)
+    task["execution_phase"] = await get_execution_phase(request.app.state.egis_bus, sid)
     progress = getattr(request.app.state.egis_bus, "collaborator_progress", None)
     if progress is not None and task["collaboration_allowed"]:
         members = {member.get("worker_session_id") for member in task["collaborators"]}
